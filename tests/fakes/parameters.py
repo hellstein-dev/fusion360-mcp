@@ -67,6 +67,8 @@ class FakeParameter:
         self.objectType = self.object_type
         self.entityToken = None
         self.deleted = False
+        # Referenced by a feature (not by another parameter): Fusion will not delete it.
+        self.used_by_features = False
 
     @property
     def name(self) -> str:
@@ -94,9 +96,11 @@ class FakeParameter:
 
     @property
     def isDeletable(self) -> bool:
-        return not self._owner.dependents_of(self)
+        return not self.used_by_features and not self._owner.dependents_of(self)
 
     def deleteMe(self) -> bool:
+        if self.used_by_features:
+            return False
         return self._owner.delete(self)
 
     def __repr__(self) -> str:

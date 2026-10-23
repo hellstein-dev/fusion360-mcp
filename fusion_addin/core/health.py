@@ -58,19 +58,32 @@ def _timeline_ref(item: Any) -> str:
     return f"timeline:{item.name}"
 
 
-def timeline_errors(design: Any) -> list[dict[str, str]]:
-    """Timeline items in the ``error`` state; a direct design has none."""
+def _timeline_in_state(design: Any, state: str) -> list[dict[str, str]]:
     if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
         return []
     timeline = design.timeline
-    errors = []
+    found = []
     for index in range(timeline.count):
         item = timeline.item(index)
-        if health_of(item) == "error":
-            errors.append(
-                {"ref": _timeline_ref(item), "name": item.name, "message": _message(item)}
-            )
-    return errors
+        if health_of(item) == state:
+            found.append({"ref": _timeline_ref(item), "name": item.name, "message": _message(item)})
+    return found
+
+
+def timeline_errors(design: Any) -> list[dict[str, str]]:
+    """Timeline items in the ``error`` state; a direct design has none."""
+    return _timeline_in_state(design, "error")
+
+
+def timeline_warnings(design: Any) -> list[dict[str, str]]:
+    """Timeline items in the ``warning`` state; a direct design has none."""
+    return _timeline_in_state(design, "warning")
+
+
+def new_items(before: list[dict[str, str]], after: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Items of ``after`` whose ref is not in ``before`` (health snapshots, c04 D7)."""
+    seen = {item["ref"] for item in before}
+    return [item for item in after if item["ref"] not in seen]
 
 
 def check_health(entity: Any) -> dict[str, str]:
