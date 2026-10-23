@@ -67,7 +67,7 @@ class FakeDesign(adsk.fusion.Design):
         self.by_token: dict[str, Any] = {}
         self.allParameters = FakeCollection()
         self.allComponents = FakeCollection()
-        self.rootComponent = FakeEntity(
+        self.rootComponent: Any = FakeEntity(
             "adsk::fusion::Component", "root", allOccurrences=FakeCollection()
         )
         self.allComponents.add(self.rootComponent)

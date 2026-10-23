@@ -9,6 +9,7 @@ mm², mm³, degrees, kg and kg/m³. A string value is a Fusion expression ("10 m
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import Literal, TypeAlias
 
 Length: TypeAlias = float | str
@@ -105,6 +106,28 @@ def density_from_internal(kg_per_cm3: float) -> float:
 def mass_from_internal(kg: float) -> float:
     """Fusion reports mass in kg already; kept here so every conversion has one home."""
     return _number(kg)
+
+
+# --- agent-facing helpers for inspection (c03 D2) ----------------------------------------
+
+USER_ROUND_DIGITS = 6
+
+
+def vec3_length_to_user(xyz_cm: Sequence[float]) -> list[float]:
+    """Point ``[x, y, z]`` in cm -> mm, rounded to 1e-6 mm."""
+    if len(xyz_cm) != 3:
+        raise ValueError(f"expected 3 coordinates, got {len(xyz_cm)}")
+    return [round(length_from_internal(c), USER_ROUND_DIGITS) + 0.0 for c in xyz_cm]
+
+
+def inertia_to_user(kg_cm2: float) -> float:
+    """Moment of inertia kg·cm² (Fusion) -> kg·mm²: scales like an area."""
+    return area_from_internal(kg_cm2)
+
+
+def density_to_user(kg_cm3: float) -> float:
+    """Density kg/cm³ (Fusion) -> kg/m³."""
+    return density_from_internal(kg_cm3)
 
 
 class Units:

@@ -1,4 +1,4 @@
-"""Stub of ``adsk.fusion``: ``Design.cast()`` and ``DesignTypes``."""
+"""Stub of ``adsk.fusion``: ``Design.cast()``, ``DesignTypes`` and the enums the add-in reads."""
 
 from . import Unavailable
 
@@ -19,3 +19,20 @@ class Design:
         if obj is None:
             return Unavailable("adsk.fusion.Design")
         return None
+
+
+# Enum values match Fusion's adsk.fusion.
+class CalculationAccuracy:
+    LowCalculationAccuracy = 0
+    MediumCalculationAccuracy = 1
+    HighCalculationAccuracy = 2
+    VeryHighCalculationAccuracy = 3
+
+
+class FeatureHealthStates:
+    HealthyFeatureHealthState = 0
+    WarningFeatureHealthState = 1
+    ErrorFeatureHealthState = 2
+    SuppressedFeatureHealthState = 3
+    RolledBackFeatureHealthState = 4
+    UnknownFeatureHealthState = 5

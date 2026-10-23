@@ -29,7 +29,7 @@ def test_registered_as_mutating() -> None:
 
 def test_returns_result_and_empty_output() -> None:
     design = FakeDesign()
-    design.rootComponent.bRepBodies = [1, 2]  # type: ignore[attr-defined]
+    design.rootComponent.bRepBodies = [1, 2]
     assert run("result = len(root.bRepBodies)", design) == {
         "result": 2,
         "stdout": "",
