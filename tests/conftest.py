@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+pytest_plugins = ["pytester"]
+
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_DIR = TESTS_DIR.parent  # mcp-plugin/: holds the fusion_addin package
 

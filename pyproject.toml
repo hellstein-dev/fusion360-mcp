@@ -53,3 +53,6 @@ warn_return_any = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["fusion: requires a running Fusion 360 with the add-in loaded"]
+# Smoke tests on a live Fusion run only on request: `pytest -m fusion`.
+addopts = ["-m", "not fusion"]
