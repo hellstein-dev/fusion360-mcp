@@ -11,3 +11,10 @@ PLUGIN_DIR = TESTS_DIR.parent  # mcp-plugin/: holds the fusion_addin package
 for path in (TESTS_DIR / "stubs", PLUGIN_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
+
+META_TEST_MODULE = "test_zz_tool_coverage.py"
+
+
+def pytest_collection_modifyitems(items: list) -> None:
+    """Run the tool-coverage meta-test last: it checks what the tool tests recorded."""
+    items.sort(key=lambda item: item.path.name == META_TEST_MODULE)
