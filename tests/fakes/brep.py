@@ -484,6 +484,50 @@ class FakeFeature:
         self.entityToken = token or _token("feature-")
 
 
+# --- measuring ---------------------------------------------------------------------------------
+
+
+class FakeOrientedBox:
+    def __init__(self, box: FakeBoundingBox) -> None:
+        lo, hi = box.minPoint, box.maxPoint
+        self.centerPoint = P((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, (lo.z + hi.z) / 2)
+        self.length = hi.x - lo.x
+        self.width = hi.y - lo.y
+        self.height = hi.z - lo.z
+
+
+class FakeMeasureResults:
+    def __init__(self, value: float, one: Any = None, two: Any = None) -> None:
+        self.value = value
+        self.positionOne = one
+        self.positionTwo = two
+
+
+class FakeMeasureManager:
+    """``app.measureManager``. Oriented boxes come from ``entity.tight_box`` if set, else
+    ``entity.boundingBox``; types in ``unsupported`` raise like Fusion does."""
+
+    def __init__(self) -> None:
+        self.unsupported: set[str] = set()
+        self.calls: list[tuple[Any, ...]] = []
+        self.distance = FakeMeasureResults(0.0, P(0, 0, 0), P(0, 0, 0))
+        self.angle = FakeMeasureResults(0.0)
+
+    def getOrientedBoundingBox(self, entity: Any, length_dir: Any, width_dir: Any) -> Any:
+        self.calls.append(("obb", entity, length_dir.asArray(), width_dir.asArray()))
+        if entity.objectType.rsplit("::", 1)[-1] in self.unsupported:
+            raise RuntimeError("InternalValidationError: entity not supported")
+        return FakeOrientedBox(getattr(entity, "tight_box", None) or entity.boundingBox)
+
+    def measureMinimumDistance(self, a: Any, b: Any) -> FakeMeasureResults:
+        self.calls.append(("distance", a, b))
+        return self.distance
+
+    def measureAngle(self, a: Any, b: Any, c: Any = None) -> FakeMeasureResults:
+        self.calls.append(("angle", a, b, c))
+        return self.angle
+
+
 # --- components and occurrences ---------------------------------------------------------------
 
 ORIGIN_ATTRS = {

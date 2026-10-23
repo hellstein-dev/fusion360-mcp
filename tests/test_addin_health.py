@@ -80,7 +80,7 @@ def test_timeline_errors() -> None:
     bad = timeline.item(2)
     bad.healthState = HS.ErrorFeatureHealthState  # type: ignore[attr-defined]
     bad.errorOrWarningMessage = "radius too big"  # type: ignore[attr-defined]
-    bad.entity.entityToken = "tok-fillet"  # type: ignore[union-attr]
+    bad.entity.entityToken = "tok-fillet"
     design = FakeDesign(timeline=timeline)
     assert timeline_errors(design) == [
         {"ref": "tok-fillet", "name": "Fillet1", "message": "radius too big"}

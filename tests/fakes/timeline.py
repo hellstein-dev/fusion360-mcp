@@ -6,6 +6,8 @@ item's entity removes the item. Shared by later changes' handler tests.
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class FakeEntity:
     def __init__(self, timeline: FakeTimeline, item: FakeTimelineObject) -> None:
@@ -22,7 +24,7 @@ class FakeTimelineObject:
         self._timeline = timeline
         self.name = name
         self.isGroup = is_group
-        self.entity = None if is_group else FakeEntity(timeline, self)
+        self.entity: Any = None if is_group else FakeEntity(timeline, self)
 
     def deleteMe(self, deleteGroupAndContents: bool = True) -> bool:
         """Only groups have this form in Fusion (``TimelineGroup.deleteMe``)."""
