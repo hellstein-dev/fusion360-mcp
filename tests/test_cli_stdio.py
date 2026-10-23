@@ -47,7 +47,7 @@ def test_initialize_and_list_tools_over_stdio() -> None:
     assert 1 in replies, proc.stderr
     assert replies[1]["result"]["serverInfo"]["name"] == "fusion-mcp"
     tools = {tool["name"]: tool for tool in replies[2]["result"]["tools"]}
-    assert "fusion_status" in tools
+    assert {"fusion_status", "execute_python"} <= set(tools)
     for tool in tools.values():
         assert tool["inputSchema"]["type"] == "object"
         assert tool["description"]
