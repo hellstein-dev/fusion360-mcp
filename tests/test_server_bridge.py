@@ -20,6 +20,9 @@ def execute(request: Request) -> Response:
         return Response(request.id, True, result={"params": request.params})
     if request.method == "big.run":
         return Response(request.id, True, result={"data": "x" * 200_000})
+    if request.method == "screenshot.run":
+        # ~3 MB on one JSON line: a 2048 px viewport PNG as base64 (c03 5.7).
+        return Response(request.id, True, result={"image_base64": "QUJD" * 750_000})
     if request.method == "slow.run":
         time.sleep(0.5)
         return Response(request.id, True, result={})
@@ -90,6 +93,17 @@ def test_large_result_line(addin: Addin, tmp_path: Path) -> None:
             await client.close()
 
     assert len(run(go())["data"]) == 200_000
+
+
+def test_three_megabyte_result_line(addin: Addin, tmp_path: Path) -> None:
+    async def go():
+        client = BridgeClient(home=tmp_path)
+        try:
+            return await client.call("screenshot.run")
+        finally:
+            await client.close()
+
+    assert len(run(go())["image_base64"]) == 3_000_000
 
 
 def test_bridge_error_is_raised(addin: Addin, tmp_path: Path) -> None:
