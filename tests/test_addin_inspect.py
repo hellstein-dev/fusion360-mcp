@@ -410,6 +410,13 @@ def test_query_validation_happens_first() -> None:
     invalid(inspect.inspect_query, fake_part_design(), {"kind": "face", "scope": ["origin:XY"]})
 
 
+def test_query_component_without_bodies_is_an_empty_scope() -> None:
+    design = fake_part_design()
+    design.add_entity(design.rootComponent)
+    out = query(design, kind="face", scope=[design.rootComponent.entityToken])
+    assert out == {"items": [], "total": 0, "truncated": False}
+
+
 def test_query_stale_scope_is_not_found() -> None:
     with pytest.raises(BridgeError) as info:
         query(fake_part_design(), kind="face", scope=["gone"])

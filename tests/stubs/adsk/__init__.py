@@ -9,6 +9,11 @@ class FusionUnavailableError(RuntimeError):
     """Raised when test code reaches into the stubbed Fusion API."""
 
 
+def doEvents() -> bool:
+    """Fusion lets queued UI events run; nothing to process outside Fusion."""
+    return True
+
+
 class Unavailable:
     """Placeholder for a Fusion object: any attribute access raises a clear error."""
 

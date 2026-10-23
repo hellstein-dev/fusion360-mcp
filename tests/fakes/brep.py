@@ -528,6 +528,57 @@ class FakeMeasureManager:
         return self.angle
 
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+class FakeCamera:
+    def __init__(self) -> None:
+        self.viewOrientation = 0
+        self.isFitView = False
+        self.isSmoothTransition = True
+
+    def copy(self) -> FakeCamera:
+        camera = FakeCamera()
+        camera.__dict__.update(self.__dict__)
+        return camera
+
+
+class FakeViewport:
+    """``app.activeViewport``: ``camera`` hands out a copy and applies on assignment, like
+    Fusion. ``saveAsImageFile`` writes PNG bytes unless ``save_result`` is False or
+    ``save_error`` is set."""
+
+    def __init__(self) -> None:
+        self._camera = FakeCamera()
+        self.camera_sets = 0
+        self.visualStyle = 0
+        self.refreshes = 0
+        self.saved: list[tuple[str, int, int]] = []
+        self.save_result = True
+        self.save_error: str | None = None
+        self.image = PNG_SIGNATURE + b"fake-image-data"
+
+    @property
+    def camera(self) -> FakeCamera:
+        return self._camera.copy()
+
+    @camera.setter
+    def camera(self, value: FakeCamera) -> None:
+        self.camera_sets += 1
+        self._camera = value.copy()
+
+    def refresh(self) -> None:
+        self.refreshes += 1
+
+    def saveAsImageFile(self, path: str, width: int, height: int) -> bool:
+        self.saved.append((path, width, height))
+        with open(path, "wb") as file:
+            file.write(self.image)
+        if self.save_error is not None:
+            raise RuntimeError(self.save_error)
+        return self.save_result
+
+
 # --- components and occurrences ---------------------------------------------------------------
 
 ORIGIN_ATTRS = {

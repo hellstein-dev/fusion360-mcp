@@ -412,9 +412,9 @@ def _children(entity: Any, kind: str) -> list[Any]:
         if kind == "vertex":
             return _items(entity.vertices)
         return [entity.body]
-    bodies = bodies_of(entity)
-    if not bodies and scope_type != "BRepBody":
+    if scope_type not in ("BRepBody", "Component", "Occurrence"):
         raise _invalid("scope", f"{scope_type} cannot be a query scope", type=scope_type)
+    bodies = bodies_of(entity)
     if kind == "body":
         return bodies
     attr = {"face": "faces", "edge": "edges", "vertex": "vertices"}[kind]
