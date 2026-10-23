@@ -112,6 +112,15 @@ class Vector3D:
 
 
 # Enum values match Fusion's adsk.core.
+class DocumentTypes:
+    FusionDesignDocumentType = 0
+    FusionDrawingDocumentType = 1
+    FusionElectronicsDocumentType = 2
+    FusionCAMDocumentType = 3
+    FusionBoardDocumentType = 4
+    FusionSchematicDocumentType = 5
+
+
 class SurfaceTypes:
     PlaneSurfaceType = 0
     CylinderSurfaceType = 1

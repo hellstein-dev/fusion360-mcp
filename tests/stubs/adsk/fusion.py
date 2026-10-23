@@ -22,6 +22,14 @@ class Design:
 
 
 # Enum values match Fusion's adsk.fusion.
+class DistanceUnits:
+    MillimeterDistanceUnits = 0
+    CentimeterDistanceUnits = 1
+    MeterDistanceUnits = 2
+    InchDistanceUnits = 3
+    FootDistanceUnits = 4
+
+
 class CalculationAccuracy:
     LowCalculationAccuracy = 0
     MediumCalculationAccuracy = 1

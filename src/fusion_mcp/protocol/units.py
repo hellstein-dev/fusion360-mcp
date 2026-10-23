@@ -130,6 +130,59 @@ def density_to_user(kg_cm3: float) -> float:
     return density_from_internal(kg_cm3)
 
 
+# --- parameters (c04 D5) -----------------------------------------------------------------
+
+UnitClass = Literal["length", "angle", "unitless", "other"]
+
+# Canonical Fusion length unit strings; synonyms ("inch", '"') are not accepted.
+PARAMETER_LENGTH_UNITS = frozenset({"mm", "cm", "m", "in", "ft", "um", "yd", "mil"})
+PARAMETER_ANGLE_UNITS = frozenset({"deg", "rad"})
+FUSION_INTERNAL = "fusion_internal"
+
+
+def classify_unit(unit: str) -> UnitClass:
+    """Kind of a Fusion parameter unit: ``length``/``angle``/``unitless``/``other``.
+
+    Case and surrounding whitespace do not matter.
+    """
+    key = unit.strip().lower()
+    if key in PARAMETER_LENGTH_UNITS:
+        return "length"
+    if key in PARAMETER_ANGLE_UNITS:
+        return "angle"
+    if key == "":
+        return "unitless"
+    return "other"
+
+
+def number_expression(value: float, unit: str) -> str:
+    """Number in ``unit`` -> Fusion expression with the unit explicit: ``"12.5 mm"``.
+
+    The number is written ``repr``-exact (no precision lost); a unitless value has no
+    unit suffix. No conversion: Fusion interprets the unit.
+    """
+    number = _number(value)
+    text = repr(int(number)) if number.is_integer() and abs(number) < 1e16 else repr(number)
+    unit = unit.strip()
+    return f"{text} {unit}" if unit else text
+
+
+def parameter_value_to_user(value_internal: float, unit: str) -> dict[str, float | str]:
+    """``Parameter.value`` (cm/radians) -> ``{"value", "value_unit"}`` for the agent.
+
+    Length -> mm, angle -> degrees, unitless -> as is; any other unit is returned as is
+    and marked ``value_unit = "fusion_internal"`` (never unmarked raw cm, INV-6).
+    """
+    kind = classify_unit(unit)
+    if kind == "length":
+        return {"value": length_from_internal(value_internal), "value_unit": "mm"}
+    if kind == "angle":
+        return {"value": angle_from_internal(value_internal), "value_unit": "deg"}
+    if kind == "unitless":
+        return {"value": _number(value_internal), "value_unit": ""}
+    return {"value": _number(value_internal), "value_unit": FUSION_INTERNAL}
+
+
 class Units:
     """Converter bound to one input length unit; handed to add-in handlers as ``ctx.units``."""
 
