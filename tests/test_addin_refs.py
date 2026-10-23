@@ -7,7 +7,7 @@ import pytest
 from fusion_addin.core import refs
 from fusion_addin.core.context import Context
 from fusion_mcp.protocol.errors import BridgeError, ErrorCode
-from tests.fakes.design import FakeApp, FakeDesign, FakeEntity
+from tests.fakes.design import FakeApp, FakeCollection, FakeDesign, FakeEntity
 
 
 @pytest.fixture
@@ -27,7 +27,9 @@ def design() -> FakeDesign:
 def test_to_ref_prefers_entity_token() -> None:
     face = FakeEntity("adsk::fusion::BRepFace", token="tok-face")
     assert refs.to_ref(face) == "tok-face"
-    assert refs.describe(face) == {"ref": "tok-face", "type": "BRepFace"}
+    # Types without a describer keep the minimal form (faces are covered in test_addin_describe).
+    profile = FakeEntity("adsk::fusion::Profile", token="tok-profile")
+    assert refs.describe(profile) == {"ref": "tok-profile", "type": "Profile"}
 
 
 @pytest.mark.parametrize(
@@ -35,9 +37,25 @@ def test_to_ref_prefers_entity_token() -> None:
     [
         (FakeEntity("adsk::fusion::UserParameter", "width"), "param:width"),
         (FakeEntity("adsk::fusion::ModelParameter", "d1"), "param:d1"),
-        (FakeEntity("adsk::fusion::Component", "Lid"), "component:Lid"),
         (
-            FakeEntity("adsk::fusion::Occurrence", "Pin:1", fullPathName="Lid:1+Pin:1"),
+            FakeEntity(
+                "adsk::fusion::Component",
+                "Lid",
+                bRepBodies=FakeCollection(),
+                sketches=FakeCollection(),
+                occurrences=FakeCollection(),
+            ),
+            "component:Lid",
+        ),
+        (
+            FakeEntity(
+                "adsk::fusion::Occurrence",
+                "Pin:1",
+                fullPathName="Lid:1+Pin:1",
+                component=FakeEntity("adsk::fusion::Component", "Pin"),
+                isGrounded=False,
+                isVisible=True,
+            ),
             "occurrence:Lid:1+Pin:1",
         ),
     ],

@@ -2,8 +2,8 @@
 
 An entity goes out as ``{"ref": <entityToken>, "type": "BRepFace", "name": ...}``. Objects
 without a token get a typed name path: ``param:<name>``, ``component:<name>``,
-``occurrence:<fullPathName>``. ``resolve`` turns a ref back into the entity or raises
-``ENTITY_NOT_FOUND``.
+``occurrence:<fullPathName>``. Origin planes/axes/point go out as ``origin:<NAME>`` (c03
+D15). ``resolve`` turns a ref back into the entity or raises ``ENTITY_NOT_FOUND``.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from fusion_mcp.protocol.errors import BridgeError, ErrorCode
+from fusion_mcp.protocol.refs import format_origin_ref, is_origin_ref, parse_origin_ref
 
 PARAM_PREFIX = "param:"
 COMPONENT_PREFIX = "component:"
@@ -33,7 +34,51 @@ def _token(entity: Any) -> str | None:
     return token if isinstance(token, str) and token else None
 
 
+ORIGIN_ATTRS = {
+    "XY": "xYConstructionPlane",
+    "XZ": "xZConstructionPlane",
+    "YZ": "yZConstructionPlane",
+    "X": "xConstructionAxis",
+    "Y": "yConstructionAxis",
+    "Z": "zConstructionAxis",
+    "O": "originConstructionPoint",
+}
+CONSTRUCTION_TYPES = ("ConstructionPlane", "ConstructionAxis", "ConstructionPoint")
+
+
+def _owner(entity: Any) -> Any:
+    for attr in ("component", "parentComponent"):
+        try:
+            owner = getattr(entity, attr, None)
+        except Exception:
+            owner = None
+        if owner is not None:
+            return owner
+    return None
+
+
+def origin_name(entity: Any) -> str | None:
+    """``"XY"``... if ``entity`` is an origin plane/axis/point of its own component."""
+    if type_name(entity) not in CONSTRUCTION_TYPES:
+        return None
+    owner = _owner(entity)
+    if owner is None:
+        return None
+    token = _token(entity)
+    for name, attr in ORIGIN_ATTRS.items():
+        try:
+            element = getattr(owner, attr)
+        except Exception:
+            continue
+        if element is entity or (token is not None and _token(element) == token):
+            return name
+    return None
+
+
 def to_ref(entity: Any) -> str:
+    origin = origin_name(entity)
+    if origin is not None:
+        return format_origin_ref(origin)
     token = _token(entity)
     if token:
         return token
@@ -50,24 +95,30 @@ def to_ref(entity: Any) -> str:
 
 
 def describe(entity: Any) -> dict[str, Any]:
-    """Minimal outward form of an entity; groups extend it in their own handlers."""
-    data: dict[str, Any] = {"ref": to_ref(entity), "type": type_name(entity)}
-    name = getattr(entity, "name", None)
-    if isinstance(name, str):
-        data["name"] = name
-    return data
+    """Brief outward form of an entity: ``core.describe.describe(entity, detail="brief")``."""
+    from .describe import describe as describe_entity
+
+    return describe_entity(entity, None, "brief")
 
 
 def _not_found(ref: str, why: str) -> BridgeError:
     return BridgeError(ErrorCode.ENTITY_NOT_FOUND, f"entity {ref!r} not found: {why}", {"ref": ref})
 
 
-def resolve(design: Any, ref: Any) -> Any:
-    """Return the entity for ``ref`` (a string or a ``{"ref": ...}`` dict)."""
+def resolve(design: Any, ref: Any, component: Any = None) -> Any:
+    """Return the entity for ``ref`` (a string or a ``{"ref": ...}`` dict).
+
+    ``origin:<NAME>`` is an origin element of ``component`` (default: the root component);
+    an unknown name is ``INVALID_PARAMS``.
+    """
     if isinstance(ref, dict):
         ref = ref.get("ref")
     if not isinstance(ref, str) or not ref:
         raise BridgeError(ErrorCode.INVALID_PARAMS, "ref must be a non-empty string", {"ref": ref})
+    if is_origin_ref(ref):
+        name = parse_origin_ref(ref)
+        owner = component if component is not None else design.rootComponent
+        return getattr(owner, ORIGIN_ATTRS[name])
     try:
         entity = _lookup(design, ref)
     except BridgeError:
@@ -102,8 +153,8 @@ class Refs:
     def __init__(self, ctx: Any) -> None:
         self._ctx = ctx
 
-    def resolve(self, ref: Any) -> Any:
-        return resolve(self._ctx.design, ref)
+    def resolve(self, ref: Any, component: Any = None) -> Any:
+        return resolve(self._ctx.design, ref, component)
 
     def to_ref(self, entity: Any) -> str:
         return to_ref(entity)
