@@ -1,0 +1,13 @@
+{
+  "autodeskProduct": "Fusion",
+  "type": "addin",
+  "id": "8b6f2a52-3c1e-4d0a-9a57-6f3f1c2e9d41",
+  "author": "fusion-mcp",
+  "description": {
+    "": "MCP bridge: lets LLM agents drive Fusion through the fusion-mcp server (127.0.0.1 only)"
+  },
+  "version": "0.1.0",
+  "runOnStartup": true,
+  "supportedOS": "windows|mac",
+  "editEnabled": true
+}
