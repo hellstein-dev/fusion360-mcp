@@ -3,3 +3,8 @@
 Loaded by Fusion, not installed with ``fusion_mcp``. Standard library only (plus ``adsk``);
 the only place in the project allowed to import ``adsk``.
 """
+
+import adsk.core
+import adsk.fusion
+
+__all__ = ["adsk"]
