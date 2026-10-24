@@ -263,6 +263,52 @@ pattern_mirror(entities=<all bodies>, plane="origin:YZ")
 body_combine(target=cube, tools=<the other bodies>)
 ```
 
+## Surfaces
+
+The `surface_*` tools model with surface bodies (sheets without volume). Each call adds one
+parametric timeline feature, except `surface_trim_cells`, which only previews:
+
+| Tool | What it does |
+|------|--------------|
+| `surface_patch` | Fill a closed boundary (sketch profile, sketch curves or edges) with a surface; continuity `connected` / `tangent` / `curvature` to the edge faces |
+| `surface_extend` | Extend free edges of a surface body by a distance (`natural`, `tangent`, `perpendicular`) |
+| `surface_trim_cells` | List the cells a trim tool cuts the surfaces into (centre, bbox, area in mm); changes nothing |
+| `surface_trim` | Trim with a body, face, plane or sketch curve and remove the cells nearest to given points |
+| `surface_untrim` | Remove all, external or internal (hole) loops of faces of surface bodies |
+| `surface_stitch` | Stitch surfaces along shared edges within a tolerance (default 0.1 mm); reports `is_solid` |
+| `surface_unstitch` | Split faces or bodies (solid or surface) into separate surface bodies |
+| `surface_ruled` | Ruled surface from edges or sketch curves: `normal`, `tangent` or along a `direction`, with angle and corner type |
+| `surface_offset` | New surface bodies at a signed distance from faces (the faces stay; moving faces of a solid is `feature_offset_faces`) |
+
+- **Surface features from sketches.** `feature_extrude`, `feature_revolve`, `feature_sweep`
+  and `feature_loft` take `is_solid` (default `true`). With `is_solid=false` they create a
+  surface body: only `new_body` / `new_component`, no `thin` for extrude. Extrude and sweep
+  then also accept open sketch curves or edges as the profile (one kind, connected curves
+  are chained), e.g. an open line extruded into a wall sheet.
+- **Trim cells by points.** Cells of a trim are temporary and have no refs. Call
+  `surface_trim_cells` first, then pass `surface_trim` a point (in `units`, default mm) on or
+  near each cell to remove, such as a cell centre. A point farther than `max_distance` from
+  every cell fails with `INVALID_PARAMS`, and `details.cells` lists the cells. The preview
+  always cancels its trim input, so nothing stays half-built.
+- **Solid or not.** Every body in a surface result has `is_solid`. `surface_stitch` also
+  returns the `is_solid` of the stitched body: `false` means gaps remain, so raise
+  `tolerance` or patch the openings. To give a surface a thickness, use `body_thicken`
+  (c08); to fill a closed set of surfaces with a solid, use `body_boundary_fill`.
+- **Refs.** Edges and faces come from `inspect_query`, curves and profiles from `sketch_*`.
+  Surface bodies get new tokens after trim, extend and stitch, so take refs from the latest
+  result. Bad input fails with `INVALID_PARAMS` before anything changes, and a feature in
+  the error state is rolled back.
+
+Example: a closed box from surfaces:
+
+```text
+feature_extrude(profiles=[<20 x 20 mm square>], side1={"type": "distance", "distance": 20},
+                is_solid=false)                        -> walls
+surface_patch(boundary=[<the square profile>])         -> bottom
+surface_patch(boundary=[<the 4 top edges of walls>])   -> top
+surface_stitch(surfaces=[walls, bottom, top])          -> is_solid = true
+```
+
 ## Assemblies
 
 The `assembly_*` tools build multi-part designs: components, occurrences, joints and
