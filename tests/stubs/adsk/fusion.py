@@ -155,6 +155,43 @@ class OffsetTypes:
     RoundedOffsetType = 1
 
 
+# Sheet metal (c13 D2).
+class BendReliefShapes:
+    StraightBendReliefShape = 0
+    TearBendReliefShape = 1
+    RoundBendReliefShape = 2
+
+
+class FlangeOrientations:
+    SideOneFlangeOrientation = 0
+    SideTwoFlangeOrientation = 1
+    CenteredFlangeOrientation = 2
+
+
+class FlangeHeightDatumTypes:
+    InnerFacesFlangeHeightDatumType = 0
+    OuterFacesFlangeHeightDatumType = 1
+    TangentToBendFlangeHeightDatumType = 2
+
+
+class BendPositionTypes:
+    StartEdgeBendPositionType = 0
+    InsideBendPositionType = 1
+    OutsideBendPositionType = 2
+    TangentToSideBendPositionType = 3
+
+
+class BRepBody:
+    """API surface of ``BRepBody`` that ``sheet_metal.capabilities`` probes (preview
+    methods); fake bodies are not instances of it."""
+
+    def convertToSheetMetal(self, baseFace: Any, sheetMetalRule: Any) -> bool:
+        raise NotImplementedError
+
+    def getBendFaces(self) -> tuple[bool, list[Any], list[Any]]:
+        raise NotImplementedError
+
+
 class MeshRefinementSettings:
     MeshRefinementHigh = 0
     MeshRefinementMedium = 1
