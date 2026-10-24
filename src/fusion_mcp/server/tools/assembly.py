@@ -557,3 +557,77 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         """
         params = {"joint": joint, "values": values, "capture_position": capture_position}
         return await call_bridge(bridge, "assembly.drive_joint", params)
+
+    # --- rigid groups, listing, interference --------------------------------------------------
+
+    @mcp.tool(name="assembly_create_rigid_group")
+    async def assembly_create_rigid_group(
+        occurrences: Annotated[
+            list[OccurrenceRef],
+            Field(min_length=2, description="At least two occurrences to lock together"),
+        ],
+        include_children: Annotated[
+            bool, Field(description="Also lock the occurrences nested inside them")
+        ] = True,
+        name: Annotated[str | None, Field(min_length=1, description="Rigid group name")] = None,
+    ) -> CallToolResult:
+        """Lock occurrences together so they move as one (a rigid group in the root
+        component). Needs at least two different occurrences ('occurrence:<path>' refs from
+        assembly_list), otherwise INVALID_PARAMS. Nothing is left on failure.
+
+        Returns {"rigid_group": {"ref", "name", "occurrences": ["occurrence:<path>"],
+        "include_children", "is_suppressed"}}.
+
+        Example: assembly_create_rigid_group(occurrences=["occurrence:Box:1",
+        "occurrence:Handle:1"]) -> {"rigid_group": {"ref": "Rg=", "name": "Rigid1",
+        "occurrences": ["occurrence:Box:1", "occurrence:Handle:1"], ...}}.
+        """
+        params = _given(occurrences=occurrences, include_children=include_children, name=name)
+        return await call_bridge(bridge, "assembly.create_rigid_group", params)
+
+    @mcp.tool(name="assembly_list_joints")
+    async def assembly_list_joints() -> CallToolResult:
+        """List the joints, as-built joints, joint origins and rigid groups of every
+        component, with current joint values (degrees / mm), limits, suppression and
+        health. Use it to check a mechanism after assembly_drive_joint.
+
+        Returns {"joints": [joint], "as_built_joints": [joint], "joint_origins": [{"ref",
+        "native_ref", "name", "component"}], "rigid_groups": [{"ref", "name", "occurrences",
+        "include_children", "is_suppressed"}]}. Joint object: {"ref", "name", "type",
+        "occurrence_one", "occurrence_two", "values": {"rotation_deg" | "slide_mm" | ...},
+        "limits": {dof: {"min", "max", "rest"}}, "is_suppressed", "health", "message"}.
+
+        Example: assembly_list_joints() -> {"joints": [{"name": "Hinge", "type": "revolute",
+        "values": {"rotation_deg": 90.0}, ...}], ...}.
+        """
+        return await call_bridge(bridge, "assembly.list_joints", {})
+
+    @mcp.tool(name="assembly_analyze_interference")
+    async def assembly_analyze_interference(
+        items: Annotated[
+            list[str] | None,
+            Field(
+                min_length=2,
+                description="Occurrences ('occurrence:<path>') and/or bodies to check against "
+                "each other; default: every occurrence and the root bodies",
+            ),
+        ] = None,
+        include_coincident_faces: Annotated[
+            bool, Field(description="Also report parts that only touch (coincident faces)")
+        ] = False,
+    ) -> CallToolResult:
+        """Check whether parts overlap. Every interfering pair comes back with the overlap
+        volume (mm³) and its bounding box (mm); nothing is added to the design. Parts that
+        only touch are not reported unless include_coincident_faces=true. On big
+        assemblies pass the pairs you care about in `items` - the full check is slow.
+        Fewer than two items -> INVALID_PARAMS.
+
+        Returns {"checked": <number of items>, "count": <pairs>, "interferences":
+        [{"entity_one", "entity_two", "volume_mm3", "bbox": {"min_mm", "max_mm",
+        "size_mm"}}]}.
+
+        Example: assembly_analyze_interference(items=["occurrence:Box:1",
+        "occurrence:Lid:1"]) -> {"checked": 2, "count": 0, "interferences": []}.
+        """
+        params = _given(items=items, include_coincident_faces=include_coincident_faces)
+        return await call_bridge(bridge, "assembly.analyze_interference", params)

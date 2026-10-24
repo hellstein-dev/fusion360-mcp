@@ -31,7 +31,7 @@ from fusion_mcp.protocol.errors import BridgeError, ErrorCode
 from fusion_mcp.protocol.refs import with_context
 from fusion_mcp.protocol.units import USER_ROUND_DIGITS, point_to_internal
 
-from ..core import features, jointgeo, refs, transforms
+from ..core import features, geometry, jointgeo, refs, transforms
 from ..core.compensate import Compensation
 from ..core.describe import describe
 from ..core.health import check_health, entity_health
@@ -897,3 +897,137 @@ def assembly_drive_joint(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         "clamped": clamped,
         "captured": captured,
     }
+
+
+# --- 6. rigid groups and joint listing -----------------------------------------------------------
+
+
+def _rigid_group(group: Any, fallback: list[Any] | None = None) -> dict[str, Any]:
+    """``{"ref", "name", "occurrences", "include_children", "is_suppressed"}``."""
+    members = _items(_safe(group, "occurrences")) or (fallback or [])
+    include = _safe(group, "includeChildren")
+    return {
+        "ref": refs.to_ref(group),
+        "name": _safe(group, "name"),
+        "occurrences": [_occurrence_ref(o) for o in members],
+        "include_children": bool(include) if include is not None else None,
+        "is_suppressed": bool(_safe(group, "isSuppressed", False)),
+    }
+
+
+@handler("assembly.create_rigid_group", mutating=True)
+def assembly_create_rigid_group(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    refs_in = ctx.require(params, "occurrences", list)
+    include_children = ctx.require(params, "include_children", bool, True)
+    name = _optional_name(ctx, params)
+    occurrences: list[Any] = []
+    for i, ref in enumerate(refs_in):
+        occurrence = _in_root_context(ctx, _occurrence(ctx, ref, f"occurrences[{i}]"))
+        if any(o.fullPathName == occurrence.fullPathName for o in occurrences):
+            raise _invalid(f"occurrences[{i}] is listed twice", param=f"occurrences[{i}]")
+        occurrences.append(occurrence)
+    if len(occurrences) < 2:
+        raise _invalid(
+            "a rigid group needs at least two occurrences", param="occurrences", count=len(refs_in)
+        )
+    collection = adsk.core.ObjectCollection.create()
+    for occurrence in occurrences:
+        collection.add(occurrence)
+    with Compensation() as comp:
+        group = ctx.root.rigidGroups.add(collection, include_children)
+        _finish(comp, group, name, "rigid group")
+        result = {"rigid_group": _rigid_group(group, occurrences)}
+    return result
+
+
+@handler("assembly.list_joints")
+def assembly_list_joints(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    joints: list[dict[str, Any]] = []
+    as_built: list[dict[str, Any]] = []
+    origins: list[dict[str, Any]] = []
+    groups: list[dict[str, Any]] = []
+    for component in _items(ctx.design.allComponents):
+        joints.extend(_joint(ctx, j) for j in _items(_safe(component, "joints")))
+        as_built.extend(_joint(ctx, j) for j in _items(_safe(component, "asBuiltJoints")))
+        origins.extend(_joint_origin(ctx, o) for o in _items(_safe(component, "jointOrigins")))
+        groups.extend(_rigid_group(g) for g in _items(_safe(component, "rigidGroups")))
+    return {
+        "joints": joints,
+        "as_built_joints": as_built,
+        "joint_origins": origins,
+        "rigid_groups": groups,
+    }
+
+
+# --- 6. interference -----------------------------------------------------------------------------
+
+INTERFERENCE_TYPES = ("Occurrence", "BRepBody")
+
+
+def _interference_items(ctx: Any, refs_in: list[Any] | None) -> list[Any]:
+    """Root-context occurrences and bodies to check; default: every occurrence and the
+    bodies of root."""
+    if refs_in is None:
+        root = ctx.root
+        return _items(root.allOccurrences) + _items(_safe(root, "bRepBodies"))
+    items: list[Any] = []
+    for i, ref in enumerate(refs_in):
+        param = f"items[{i}]"
+        entity = _resolve(ctx, ref, param)
+        kind = refs.type_name(entity)
+        if kind not in INTERFERENCE_TYPES:
+            raise _invalid(f"{param} must be an occurrence or a body, got {kind}", param=param)
+        entity = _in_root_context(ctx, entity)
+        if any(_entity_ref(e) == _entity_ref(entity) for e in items):
+            raise _invalid(f"{param} is listed twice", param=param)
+        items.append(entity)
+    return items
+
+
+def _entity_ref(entity: Any) -> str | None:
+    if entity is None:
+        return None
+    if refs.type_name(entity) == "Occurrence":
+        return _occurrence_ref(entity)
+    return refs.to_ref(entity)
+
+
+@handler("assembly.analyze_interference")
+def assembly_analyze_interference(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    refs_in = ctx.require(params, "items", list, None)
+    coincident = ctx.require(params, "include_coincident_faces", bool, False)
+    items = _interference_items(ctx, refs_in)
+    if len(items) < 2:
+        raise _invalid(
+            f"interference needs at least two occurrences or bodies, got {len(items)}",
+            param="items",
+            count=len(items),
+        )
+    design = ctx.design
+    if not hasattr(design, "analyzeInterference"):
+        raise _api_error("interference analysis is not available in this Fusion version")
+    collection = adsk.core.ObjectCollection.create()
+    for item in items:
+        collection.add(item)
+    interference_input = design.createInterferenceInput(collection)
+    interference_input.areCoincidentFacesIncluded = coincident
+    results = design.analyzeInterference(interference_input)
+    found = []
+    # The interference bodies are transient: nothing is added to the design (no createBodies).
+    for result in _items(results):
+        body = _safe(result, "interferenceBody")
+        volume = _safe(body, "volume")
+        box = _safe(body, "boundingBox")
+        found.append(
+            {
+                "entity_one": _entity_ref(_safe(result, "entityOne")),
+                "entity_two": _entity_ref(_safe(result, "entityTwo")),
+                "volume_mm3": (
+                    round(ctx.units.volume_out(volume), USER_ROUND_DIGITS)
+                    if volume is not None
+                    else None
+                ),
+                "bbox": geometry.bbox(box, ctx.units) if box is not None else None,
+            }
+        )
+    return {"checked": len(items), "count": len(found), "interferences": found}

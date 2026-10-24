@@ -15,6 +15,9 @@
   ``FakeJointMotion`` (values and ``FakeJointLimits`` per dof, optionally clamped to the
   limits) and ``FakeRigidGroups``. Created objects add a timeline item in a parametric
   design and remove it again in ``deleteMe``.
+- Interference (c10 6.5): ``FakeInterference(design, results)`` installs
+  ``createInterferenceInput`` / ``analyzeInterference`` returning ``FakeInterferenceResults``
+  of ``FakeInterferenceResult``.
 """
 
 from __future__ import annotations
@@ -447,6 +450,7 @@ class FakeRigidGroup(_Created):
         super().__init__(collection, name)
         self.occurrences = FakeCollection(list(occurrences))
         self.include_children = collection.include_children
+        self.includeChildren = collection.include_children
 
 
 class FakeRigidGroups(_CreatedCollection):
@@ -457,6 +461,79 @@ class FakeRigidGroups(_CreatedCollection):
     def add(self, item: Any, includeChildren: bool = True) -> Any:
         self.include_children = includeChildren
         return super().add(item)
+
+
+class FakeInterferenceResult:
+    """``InterferenceResult``: the two interfering entities and the transient overlap body.
+    ``coincident`` marks a touch-only result reported only with coincident faces included."""
+
+    def __init__(self, one: Any, two: Any, body: Any, coincident: bool = False) -> None:
+        self.entityOne = one
+        self.entityTwo = two
+        self.interferenceBody = body
+        self.coincident = coincident
+
+
+class FakeInterferenceInput:
+    """``InterferenceInput`` over ``entities`` (an ``ObjectCollection``)."""
+
+    def __init__(self, entities: Any) -> None:
+        self.entities = entities
+        self.areCoincidentFacesIncluded = False
+
+
+class FakeInterferenceResults(FakeCollection):
+    """``InterferenceResults``; ``createBodies`` is recorded (handlers must not call it)."""
+
+    def __init__(self, results: list[FakeInterferenceResult]) -> None:
+        super().__init__(results)
+        self.bodies_created = False
+
+    def createBodies(self, *args: Any) -> bool:
+        self.bodies_created = True
+        return True
+
+
+class FakeInterference:
+    """``Design.createInterferenceInput`` / ``analyzeInterference`` on a design; the
+    analysis returns ``results`` whose two entities were both passed in (coincident ones
+    only with ``areCoincidentFacesIncluded``)."""
+
+    def __init__(self, design: FakeDesign, results: list[FakeInterferenceResult]) -> None:
+        self.results = results
+        self.inputs: list[FakeInterferenceInput] = []
+        self.analyzed: list[FakeInterferenceResults] = []
+        design.createInterferenceInput = self.create_input  # type: ignore[attr-defined]
+        design.analyzeInterference = self.analyze  # type: ignore[attr-defined]
+
+    def create_input(self, entities: Any) -> FakeInterferenceInput:
+        interference_input = FakeInterferenceInput(entities)
+        self.inputs.append(interference_input)
+        return interference_input
+
+    def analyze(self, interference_input: FakeInterferenceInput) -> FakeInterferenceResults:
+        given = [
+            interference_input.entities.item(i) for i in range(interference_input.entities.count)
+        ]
+
+        def passed(entity: Any) -> bool:
+            return any(entity is e or _same_path(entity, e) for e in given)
+
+        found = [
+            r
+            for r in self.results
+            if passed(r.entityOne)
+            and passed(r.entityTwo)
+            and (interference_input.areCoincidentFacesIncluded or not r.coincident)
+        ]
+        results = FakeInterferenceResults(found)
+        self.analyzed.append(results)
+        return results
+
+
+def _same_path(a: Any, b: Any) -> bool:
+    path = getattr(a, "fullPathName", None)
+    return path is not None and path == getattr(b, "fullPathName", None)
 
 
 def install_joints(design: FakeDesign, component: FakeComponent) -> None:

@@ -354,3 +354,86 @@ def test_assembly_drive_joint() -> None:
     assert json.loads(result_text(result)) == answer
     rejected("assembly_drive_joint", {"joint": "Jt=", "values": {}})
     rejected("assembly_drive_joint", {"joint": "Jt=", "values": {"twist": 1}})
+
+
+# --- 6. rigid groups, listing, interference ----------------------------------------------------
+
+
+def test_assembly_create_rigid_group() -> None:
+    group = {
+        "ref": "Rg=",
+        "name": "Rigid1",
+        "occurrences": ["occurrence:Box:1", "occurrence:Lid:1"],
+    }
+    bridge = FakeBridge({"assembly.create_rigid_group": {"rigid_group": group}})
+    result, _ = call(
+        "assembly_create_rigid_group",
+        {"occurrences": ["occurrence:Box:1", "occurrence:Lid:1"]},
+        bridge,
+    )
+    assert bridge.last.method == "assembly.create_rigid_group"
+    assert bridge.last.params == {
+        "occurrences": ["occurrence:Box:1", "occurrence:Lid:1"],
+        "include_children": True,
+    }
+    assert json.loads(result_text(result)) == {"rigid_group": group}
+    call(
+        "assembly_create_rigid_group",
+        {
+            "occurrences": ["occurrence:A:1", "occurrence:B:1"],
+            "include_children": False,
+            "name": "G",
+        },
+        bridge,
+    )
+    assert bridge.last.params == {
+        "occurrences": ["occurrence:A:1", "occurrence:B:1"],
+        "include_children": False,
+        "name": "G",
+    }
+    rejected("assembly_create_rigid_group", {"occurrences": ["occurrence:Box:1"]})
+    rejected("assembly_create_rigid_group", {"occurrences": ["occurrence:Box:1", ""]})
+
+
+def test_assembly_create_rigid_group_error_is_passed_on() -> None:
+    error = BridgeError(ErrorCode.INVALID_PARAMS, "occurrences[1] is listed twice", {})
+    bridge = FakeBridge({"assembly.create_rigid_group": error})
+    result, _ = call(
+        "assembly_create_rigid_group",
+        {"occurrences": ["occurrence:Box:1", "occurrence:Box:1"]},
+        bridge,
+    )
+    assert result.is_error and "INVALID_PARAMS" in result_text(result)
+
+
+def test_assembly_list_joints() -> None:
+    answer = {"joints": [JOINT], "as_built_joints": [], "joint_origins": [], "rigid_groups": []}
+    bridge = FakeBridge({"assembly.list_joints": answer})
+    result, _ = call("assembly_list_joints", {}, bridge)
+    assert bridge.last.method == "assembly.list_joints"
+    assert bridge.last.params == {}
+    assert json.loads(result_text(result)) == answer
+
+
+def test_assembly_analyze_interference() -> None:
+    answer = {"checked": 2, "count": 0, "interferences": []}
+    bridge = FakeBridge({"assembly.analyze_interference": answer})
+    result, _ = call("assembly_analyze_interference", {}, bridge)
+    assert bridge.last.method == "assembly.analyze_interference"
+    assert bridge.last.params == {"include_coincident_faces": False}
+    assert json.loads(result_text(result)) == answer
+    call(
+        "assembly_analyze_interference",
+        {"items": ["occurrence:Box:1", "occurrence:Lid:1"], "include_coincident_faces": True},
+        bridge,
+    )
+    assert bridge.last.params == {
+        "items": ["occurrence:Box:1", "occurrence:Lid:1"],
+        "include_coincident_faces": True,
+    }
+    rejected("assembly_analyze_interference", {"items": ["occurrence:Box:1"]})
+
+
+def test_interference_docstring() -> None:
+    text = descriptions()["assembly_analyze_interference"]
+    assert "volume" in text and "include_coincident_faces" in text
