@@ -534,6 +534,11 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         ones from the result or sketch_get before the next fillet. Pick points default to the
         curves' shared end (or nearest ends).
 
+        Not fully atomic: Fusion cannot undo the fillet itself. If the radial dimension
+        (`dimension=True`) cannot be added, only the dimension is rolled back — the arc stays
+        and the call succeeds with warning `fillet_dimension_failed`. Dimension the arc
+        yourself with sketch_dimension, or delete it with sketch_delete.
+
         Returns {"arc": {ref}, "dimension"?: {...}, "status", "profiles"}.
 
         Example: sketch_fillet(sketch=<ref>, curve1=<bottom>, curve2=<right>,
