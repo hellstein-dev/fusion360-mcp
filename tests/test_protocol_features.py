@@ -61,3 +61,35 @@ def test_choices_may_be_any_sequence() -> None:
         check_choice("mode", "both", EXTRUDE_MODES)
     assert info.value.details["param"] == "mode"
     assert info.value.details["expected"] == ["one_side", "two_sides", "symmetric"]
+
+
+# --- c08 D1 (task 1.1): pattern, combine, move, split-face and remove vocabularies --------
+
+C08_VOCABULARIES = {
+    "PATTERN_DISTANCE_TYPES": ("extent", "spacing"),
+    "COMPUTE_OPTIONS": ("optimized", "identical", "adjust"),
+    "COMBINE_OPERATIONS": ("join", "cut", "intersect"),
+    "MOVE_TYPES": ("translate", "translate_along", "rotate", "rotate_about", "align", "matrix"),
+    "SPLIT_FACE_TYPES": ("intersection", "along_vector", "closest_point"),
+    "REMOVE_MODES": ("remove", "delete"),
+}
+
+
+@pytest.mark.parametrize(("name", "values"), list(C08_VOCABULARIES.items()))
+def test_c08_vocabularies(name: str, values: tuple[str, ...]) -> None:
+    from fusion_mcp.protocol import features
+
+    choices = getattr(features, name)
+    assert choices == values
+    for value in values:
+        assert check_choice(name.lower(), value, choices) == value
+    with pytest.raises(BridgeError) as info:
+        check_choice(name.lower(), "bogus", choices)
+    assert info.value.code is ErrorCode.INVALID_PARAMS
+    assert info.value.details == {"param": name.lower(), "value": "bogus", "expected": list(values)}
+
+
+def test_combine_operations_are_feature_operations() -> None:
+    from fusion_mcp.protocol.features import COMBINE_OPERATIONS
+
+    assert set(COMBINE_OPERATIONS) <= set(OPERATIONS)

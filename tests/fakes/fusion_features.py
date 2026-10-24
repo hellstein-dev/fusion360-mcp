@@ -28,6 +28,11 @@ Builds on the c03 fakes (``tests/fakes/brep.py``: ``FakeComponent``, ``FakeBody`
   input with ``edgeSetInputs`` and a ``createInput2`` chamfer input with ``chamferEdgeSets``
   (``edge_set_container``: each ``add*`` returns a recording edge set). A collection's
   ``on_input(inp)`` hook runs on every new input (e.g. ``inp.missing.add(...)``).
+- c08 (D15): pattern, mirror, combine, split, move, scale, thicken, boundary fill, delete /
+  replace face collections; ``copyPasteBodies``, ``deleteFaceFeatures`` and
+  ``removeFeatures`` are ``FakeDirectCollection`` (``add(entities)``). A boundary fill input
+  has ``bRepCells`` (``FakeBRepCell`` over the collection's ``cells`` - ``FakeCellBody``
+  boxes answering ``pointContainment``). ``on_add(feature)`` runs after every ``add``.
 - ``make_ctx(design, params, refs)`` is a ``Context`` over a fake app whose ref resolver
   first looks refs up in ``refs`` (ref -> entity, for entities without a token of their own),
   then in the design, and records every resolved ref.
@@ -76,7 +81,29 @@ FEATURE_COLLECTIONS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "shellFeatures": ("ShellFeature", "Shell", ("createInput",)),
     "draftFeatures": ("DraftFeature", "Draft", ("createInput",)),
     "offsetFacesFeatures": ("OffsetFacesFeature", "OffsetFaces", ("createInput",)),
+    # c08 D15: patterns, mirror and body operations.
+    "rectangularPatternFeatures": (
+        "RectangularPatternFeature",
+        "RectangularPattern",
+        ("createInput",),
+    ),
+    "circularPatternFeatures": ("CircularPatternFeature", "CircularPattern", ("createInput",)),
+    "pathPatternFeatures": ("PathPatternFeature", "PathPattern", ("createInput",)),
+    "mirrorFeatures": ("MirrorFeature", "Mirror", ("createInput",)),
+    "combineFeatures": ("CombineFeature", "Combine", ("createInput",)),
+    "splitBodyFeatures": ("SplitBodyFeature", "SplitBody", ("createInput",)),
+    "splitFaceFeatures": ("SplitFaceFeature", "SplitFace", ("createInput",)),
+    "moveFeatures": ("MoveFeature", "Move", ("createInput", "createInput2")),
+    "copyPasteBodies": ("CopyPasteBody", "CopyPasteBody", ()),
+    "scaleFeatures": ("ScaleFeature", "Scale", ("createInput",)),
+    "thickenFeatures": ("ThickenFeature", "Thicken", ("createInput",)),
+    "boundaryFillFeatures": ("BoundaryFillFeature", "BoundaryFill", ("createInput",)),
+    "deleteFaceFeatures": ("DeleteFaceFeature", "DeleteFace", ()),
+    "replaceFaceFeatures": ("ReplaceFaceFeature", "ReplaceFace", ("createInput",)),
+    "removeFeatures": ("RemoveFeature", "Remove", ()),
 }
+# Collections whose ``add`` takes the entities themselves, not a feature input.
+DIRECT_COLLECTIONS = frozenset({"copyPasteBodies", "deleteFaceFeatures", "removeFeatures"})
 
 _OWN = frozenset(
     {
@@ -199,6 +226,9 @@ class FakeFeatureCollection(FakeCollection):
         # Called with every new input after its sub-objects are made (e.g. to mark names
         # ``missing`` and test a fallback for an older Fusion API).
         self.on_input: Callable[[FakeFeatureInput], None] | None = None
+        # Called with every added feature after its bodies are placed (c08: new faces of a
+        # split, new occurrences of a pattern).
+        self.on_add: Callable[[Any], None] | None = None
         self._created: list[tuple[FakeBody, Any]] = []
         self._modified: list[FakeBody] = []
         self._removed: list[FakeBody] = []
@@ -272,6 +302,8 @@ class FakeFeatureCollection(FakeCollection):
             self._unregister(body, owner)
         self._items.append(feature)
         self._attach(feature, new_bodies, removed_from)
+        if self.on_add is not None:
+            self.on_add(feature)
         return feature
 
     def _place(self, body: FakeBody, owner: Any) -> FakeBody:
@@ -314,6 +346,63 @@ class FakeFeatureCollection(FakeCollection):
             return True
 
         feature.deleteMe = delete_me
+
+
+class FakeDirectCollection(FakeFeatureCollection):
+    """A collection whose ``add(entities)`` takes the entities directly (c08 D15):
+    ``copyPasteBodies``, ``deleteFaceFeatures``, ``removeFeatures``. The argument is kept as
+    ``feature.input.create_args[0]``. ``removeFeatures.add(body)`` removes ``body`` from its
+    component (undone with the feature)."""
+
+    def add(self, item: Any) -> Any:
+        if self.add_error is not None:
+            raise RuntimeError(self.add_error)
+        if self.kind == "RemoveFeature" and isinstance(item, FakeBody):
+            self.will_remove(item)
+        inp = FakeFeatureInput(self, "add", (item,))
+        self.inputs.append(inp)
+        return super().add(inp)
+
+
+class FakeCellBody(FakeBody):
+    """``BRepCell.cellBody``: a box ``lo``..``hi`` (cm) answering ``pointContainment``."""
+
+    def __init__(
+        self,
+        lo: tuple[float, float, float],
+        hi: tuple[float, float, float],
+        name: str = "Cell",
+    ) -> None:
+        from .brep import FakeBoundingBox
+
+        volume = (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2])
+        super().__init__(name, volume=volume, bounding_box=FakeBoundingBox(lo, hi))
+        self.lo, self.hi = lo, hi
+        self.queries: list[Any] = []
+
+    def pointContainment(self, point: Any) -> int:
+        self.queries.append(point)
+        inside = all(
+            lo < c < hi for lo, c, hi in zip(self.lo, point.asArray(), self.hi, strict=True)
+        )
+        containment = adsk.fusion.PointContainment
+        if inside:
+            return int(containment.PointInsidePointContainment)
+        return int(containment.PointOutsidePointContainment)
+
+
+class FakeBRepCell:
+    """``BRepCell`` of a boundary fill input: ``cellBody`` and a settable ``isSelected``."""
+
+    objectType = "adsk::fusion::BRepCell"
+
+    def __init__(self, cell_body: FakeCellBody) -> None:
+        self.cellBody = cell_body
+        self.isSelected = False
+
+
+class FakeBRepCells(FakeCollection):
+    """``BoundaryFillFeatureInput.bRepCells``."""
 
 
 class FakeLoftSections(FakeCollection):
@@ -491,6 +580,9 @@ def _prepare_input(collection: FakeFeatureCollection, method: str, inp: FakeFeat
         inp.provide("edgeSetInputs", edge_set_container("edgeSetInputs"))
     if collection.kind == "ChamferFeature" and method == "createInput2":
         inp.provide("chamferEdgeSets", edge_set_container("chamferEdgeSets"))
+    if collection.kind == "BoundaryFillFeature" and method == "createInput":
+        cells = [FakeBRepCell(body) for body in getattr(collection, "cells", [])]
+        inp.provide("bRepCells", FakeBRepCells(cells))
     if collection.on_input is not None:
         collection.on_input(inp)
 
@@ -512,7 +604,8 @@ class FakeFeatures:
             raise ValueError(f"unknown feature collections: {sorted(unknown)}")
         for attr, (kind, prefix, methods) in FEATURE_COLLECTIONS.items():
             if attr not in skipped:
-                setattr(self, attr, FakeFeatureCollection(component, design, kind, prefix, methods))
+                cls = FakeDirectCollection if attr in DIRECT_COLLECTIONS else FakeFeatureCollection
+                setattr(self, attr, cls(component, design, kind, prefix, methods))
         threads = getattr(self, "threadFeatures", None)
         if threads is not None:
             threads.threadDataQuery = FakeThreadDataQuery()

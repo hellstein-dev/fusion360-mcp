@@ -46,6 +46,13 @@ FILLET_MODES = ("constant", "variable", "chord")
 FILLET_CORNERS = ("rolling_ball", "setback")
 RULE_FILLET_RULES = ("all_edges", "between_faces")
 CHAMFER_MODES = ("equal", "two_distances", "distance_angle")
+# Patterns, mirror and body operations (c08 D1).
+PATTERN_DISTANCE_TYPES = ("extent", "spacing")
+COMPUTE_OPTIONS = ("optimized", "identical", "adjust")
+COMBINE_OPERATIONS = ("join", "cut", "intersect")
+MOVE_TYPES = ("translate", "translate_along", "rotate", "rotate_about", "align", "matrix")
+SPLIT_FACE_TYPES = ("intersection", "along_vector", "closest_point")
+REMOVE_MODES = ("remove", "delete")
 
 
 def check_choice(name: str, value: Any, choices: Sequence[str]) -> str:

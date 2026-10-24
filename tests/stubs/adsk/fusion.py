@@ -51,6 +51,19 @@ class PatternDistanceType:
     SpacingPatternDistanceType = 1
 
 
+class PatternComputeOptions:
+    OptimizedPatternCompute = 0
+    IdenticalPatternCompute = 1
+    AdjustPatternCompute = 2
+
+
+class PointContainment:
+    PointInsidePointContainment = 0
+    PointOnPointContainment = 1
+    PointOutsidePointContainment = 2
+    UnknownPointContainment = 3
+
+
 class FeatureHealthStates:
     HealthyFeatureHealthState = 0
     WarningFeatureHealthState = 1

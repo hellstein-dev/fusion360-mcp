@@ -175,6 +175,19 @@ class Vector3D:
     def isEqualTo(self, vector: "Vector3D") -> bool:
         return math.dist(self.asArray(), vector.asArray()) < 1e-9
 
+    def setWithArray(self, coordinates: Iterable[float]) -> bool:
+        values = [float(v) for v in coordinates]
+        if len(values) != 3:
+            return False
+        self.x, self.y, self.z = values
+        return True
+
+    def isParallelTo(self, vector: "Vector3D") -> bool:
+        return self.crossProduct(vector).length < 1e-9 * max(1.0, self.length * vector.length)
+
+    def isPerpendicularTo(self, vector: "Vector3D") -> bool:
+        return abs(self.dotProduct(vector)) < 1e-9 * max(1.0, self.length * vector.length)
+
     def __repr__(self) -> str:
         return f"Vector3D({self.x}, {self.y}, {self.z})"
 
