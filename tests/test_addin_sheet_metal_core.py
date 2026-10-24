@@ -54,11 +54,16 @@ def test_wrappers_call_fusion() -> None:
     design = fake_sheet_metal_design(body)
     root = design.rootComponent
     inp = api.create_contour_flange_input(root, "profile", "dist")
+    # One entity or an ObjectCollection goes to Fusion as a list (std::vector, c15 6.1).
     assert inp.create_method == "createContourFlangeInput" and inp.create_args == (
-        "profile",
+        ["profile"],
         "dist",
     )
     assert api.create_base_flange_input(root, ["p"]).create_args == (["p"],)
+    many = adsk.core.ObjectCollection.createWithArray(["p1", "p2"])
+    assert api.create_base_flange_input(root, many).create_args == (["p1", "p2"],)
+    with pytest.raises(TypeError, match="std::vector"):
+        root.features.flangeFeatures.createContourFlangeInput(many, "dist")
     assert api.create_edge_flange_input(root, [], None).create_args == ([], None)
     assert api.create_unfold_input(root, "face").create_args == ("face",)
     assert api.create_refold_input(root, "unfold").create_args == ("unfold",)

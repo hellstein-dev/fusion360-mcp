@@ -44,6 +44,13 @@ adsk = fusion_addin.adsk
 RELIEF = adsk.fusion.BendReliefShapes
 
 _NUMBER = re.compile(r"(\d+(?:\.\d+)?)\s*(mm|cm)?")
+NO_DATA_ERROR = "2 : InternalValidationError : smDataRoot"
+# Flange creation methods whose first argument is a ``std::vector`` on the live Fusion.
+VECTOR_FIRST = {
+    "createBaseFlangeInput": "Profile",
+    "createContourFlangeInput": "Profile",
+    "createEdgeFlangeInput": "BRepEdge",
+}
 
 
 class FakeSheetMetalRuleValue:
@@ -164,6 +171,30 @@ class FakeSheetMetalRules(FakeCollection):
         super().__init__()
         self.copy_error: str | None = None
         self.copies: list[FakeSheetMetalRule] = []
+        # Like the design rules of a fresh live design (c15 6.1): every read raises
+        # ``smDataRoot``; the first ``addByCopy`` raises it too but adds the rule and clears it.
+        self.no_data = False
+
+    def _check_data(self) -> None:
+        if self.no_data:
+            raise RuntimeError(NO_DATA_ERROR)
+
+    @property
+    def count(self) -> int:
+        self._check_data()
+        return len(self._items)
+
+    def item(self, index: int) -> Any:
+        self._check_data()
+        return super().item(index)
+
+    def itemByName(self, name: str) -> Any:
+        self._check_data()
+        return next((rule for rule in self._items if rule.name == name), None)
+
+    def __iter__(self) -> Any:
+        self._check_data()
+        return iter(list(self._items))
 
     def add_rule(self, rule: FakeSheetMetalRule) -> FakeSheetMetalRule:
         rule.owner = self
@@ -176,6 +207,9 @@ class FakeSheetMetalRules(FakeCollection):
         copy = rule.copy(name, self)
         self._items.append(copy)
         self.copies.append(copy)
+        if self.no_data:
+            self.no_data = False
+            raise RuntimeError(NO_DATA_ERROR)
         return copy
 
     @property
@@ -211,6 +245,12 @@ class FakeSheetMetalFeatures(FakeFeatureCollection):
         create = super().__getattr__(name)
 
         def prepared(*args: Any) -> FakeFeatureInput:
+            item_type = VECTOR_FIRST.get(name) if self.kind == "FlangeFeature" else None
+            if item_type is not None and not isinstance(args[0] if args else None, list):
+                raise TypeError(
+                    f"in method 'FlangeFeatures_{name}', argument 2 of type 'std::vector< "
+                    f"adsk::core::Ptr< adsk::fusion::{item_type} > > const &'"
+                )
             inp = create(*args)
             if self.kind == "FlangeFeature":
                 inp.provide("bendRadiusOverride", FakeFeatureInput(None, "bendRadiusOverride"))
@@ -333,6 +373,8 @@ class FakeWorkspace:
     def activate(self) -> bool:
         self.activations += 1
         if self.id == "FusionSolidEnvironment":
+            if self.app.activeProduct == self.design:
+                return False  # live Fusion: activating the active workspace answers False
             self.app.activeProduct = self.design
         return True
 

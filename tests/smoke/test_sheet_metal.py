@@ -166,7 +166,10 @@ def bracket(rule: str | None) -> str:
         "origin:XY",
         [
             {"kind": "line", "id": "a", "start": [0, 0], "end": [40, 0]},
-            {"kind": "line", "id": "b", "start": [40, 0], "end": [40, 30]},
+            # Starts on a's end point: two lines that only meet at equal coordinates are not
+            # connected, and the contour flange of such an open profile loses its profile
+            # reference (live Fusion warning "Tool body creation failed", c15 6.1).
+            {"kind": "line", "id": "b", "start": "a.end", "end": [40, 30]},
         ],
     )
     arguments: dict[str, Any] = {

@@ -149,6 +149,51 @@ def _rule_collections(ctx: Any) -> dict[str, Any]:
     }
 
 
+# A design without sheet metal data yet (live Fusion, c15 6.1): every read of
+# ``designSheetMetalRules`` (count, item, itemByName) raises "2 : InternalValidationError :
+# smDataRoot", and the first ``addByCopy`` raises it too - but still adds the rule and creates
+# the data, after which the collection works.
+NO_SHEET_METAL_DATA = "smDataRoot"
+
+
+def _no_data(exc: Exception) -> bool:
+    return NO_SHEET_METAL_DATA in str(exc)
+
+
+def design_rule_items(design_rules: Any) -> list[Any]:
+    """Rules of ``designSheetMetalRules``; none while the design has no sheet metal data."""
+    try:
+        return _items(design_rules)
+    except Exception as exc:
+        if _no_data(exc):
+            return []
+        raise
+
+
+def design_rule_by_name(design_rules: Any, name: str) -> Any:
+    """``itemByName`` (``None`` if missing, or while the design has no sheet metal data)."""
+    try:
+        return design_rules.itemByName(name)
+    except Exception as exc:
+        if _no_data(exc):
+            return None
+        raise
+
+
+def add_rule_copy(design_rules: Any, base: Any, name: str) -> Any:
+    """``addByCopy(base, name)``; in a design without sheet metal data Fusion raises
+    ``smDataRoot`` but adds the rule, which is then looked up by name."""
+    try:
+        return design_rules.addByCopy(base, name)
+    except Exception as exc:
+        if not _no_data(exc):
+            raise
+        rule = design_rule_by_name(design_rules, name)
+        if rule is None:
+            raise
+        return rule
+
+
 def rules_of(ctx: Any, source: str) -> list[tuple[Any, str]]:
     """``(rule, source)`` of ``source`` (design / library / all, design first)."""
     source = check_choice("source", source, RULE_SOURCES)
@@ -158,7 +203,12 @@ def rules_of(ctx: Any, source: str) -> list[tuple[Any, str]]:
     out: list[tuple[Any, str]] = []
     for name in ("design", "library"):
         if source in (name, "all"):
-            out.extend((rule, name) for rule in _items(collections[name]))
+            items = (
+                design_rule_items(collections[name])
+                if name == "design"
+                else _items(collections[name])
+            )
+            out.extend((rule, name) for rule in items)
     return out
 
 
@@ -274,13 +324,15 @@ def apply_rule(
     copied = False
     if where == "library":
         design_rules = _rule_collections(ctx)["design"]
-        existing = design_rules.itemByName(rule.name) if design_rules is not None else None
+        existing = (
+            design_rule_by_name(design_rules, rule.name) if design_rules is not None else None
+        )
         if existing is not None:
             rule = existing
         else:
             if design_rules is None:
                 raise api_unavailable("Design.designSheetMetalRules")
-            rule = design_rules.addByCopy(rule, rule.name)
+            rule = add_rule_copy(design_rules, rule, rule.name)
             if rule is None:
                 raise BridgeError(
                     ErrorCode.FUSION_API_ERROR, f"Fusion could not copy rule {name!r}"

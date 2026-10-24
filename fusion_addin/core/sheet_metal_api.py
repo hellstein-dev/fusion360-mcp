@@ -68,11 +68,24 @@ def refold_features(component: Any) -> Any:
 # --- flanges ---------------------------------------------------------------------------------
 
 
+def as_list(entities: Any) -> list[Any]:
+    """A Python list of ``entities`` (one entity, a list/tuple or an ``ObjectCollection``):
+    the flange inputs take ``std::vector`` arrays and reject an ``ObjectCollection`` with a
+    ``TypeError`` on the live Fusion (c15 6.1)."""
+    if isinstance(entities, list | tuple):
+        return list(entities)
+    count = _lookup(entities, "count")
+    item = _lookup(entities, "item")
+    if isinstance(count, int) and callable(item):
+        return [item(i) for i in range(count)]
+    return [entities]
+
+
 def create_base_flange_input(component: Any, profiles: Any) -> Any:
     create = require_api(
         flange_features(component), "createBaseFlangeInput", "FlangeFeatures.createBaseFlangeInput"
     )
-    return create(profiles)
+    return create(as_list(profiles))
 
 
 def create_contour_flange_input(component: Any, profiles: Any, distance: Any) -> Any:
@@ -81,14 +94,14 @@ def create_contour_flange_input(component: Any, profiles: Any, distance: Any) ->
         "createContourFlangeInput",
         "FlangeFeatures.createContourFlangeInput",
     )
-    return create(profiles, distance)
+    return create(as_list(profiles), distance)
 
 
 def create_edge_flange_input(component: Any, edges: Any, distance: Any) -> Any:
     create = require_api(
         flange_features(component), "createEdgeFlangeInput", "FlangeFeatures.createEdgeFlangeInput"
     )
-    return create(edges, distance)
+    return create(as_list(edges), distance)
 
 
 def add_flange(component: Any, feature_input: Any) -> Any:

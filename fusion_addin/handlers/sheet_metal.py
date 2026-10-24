@@ -54,6 +54,7 @@ from ..core.sheet_metal import (
     OUT,
     RULE_VALUES,
     active_rule_name,
+    add_rule_copy,
     apply_rule,
     check_k_factor,
     component_ref,
@@ -61,6 +62,7 @@ from ..core.sheet_metal import (
     delete_entity,
     describe_flat_pattern,
     describe_rule,
+    design_rule_by_name,
     find_rule,
     flat_pattern_of,
     no_flat_pattern,
@@ -253,7 +255,7 @@ def sheet_metal_create_rule(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     else:
         base, base_source = default_library_rule(ctx), "library"
     design_rules = ctx.design.designSheetMetalRules
-    if design_rules.itemByName(name) is not None:
+    if design_rule_by_name(design_rules, name) is not None:
         raise _invalid(
             f"the design already has a sheet metal rule {name!r}", param="name", reason="exists"
         )
@@ -266,7 +268,7 @@ def sheet_metal_create_rule(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     units = ctx.units.units
 
     with Compensation() as comp:
-        rule = design_rules.addByCopy(base, name)
+        rule = add_rule_copy(design_rules, base, name)
         if rule is None:
             raise _api_error(f"Fusion could not copy rule {base.name!r}")
         comp.add(lambda: delete_entity(rule), f"delete rule {name!r}")
@@ -637,9 +639,13 @@ def sheet_metal_refold(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _back_to_design(ctx: Any, design: Any) -> None:
-    """``createFlatPattern`` switches to the flat pattern environment (R4): activate the design
-    workspace again."""
-    if ctx.app.activeProduct is design:
+    """``createFlatPattern`` may switch to the flat pattern environment (R4): activate the design
+    workspace again. On the live Fusion (c15 6.1) the design stays the active product and the
+    design workspace stays active - ``activate()`` then answers ``False``, so both are checked
+    first; ``==`` because each API access returns a new wrapper (``is`` never holds)."""
+    if ctx.app.activeProduct == design:
+        return
+    if _get(_get(ctx.ui, "activeWorkspace"), "id") == DESIGN_WORKSPACE:
         return
     workspace = ctx.ui.workspaces.itemById(DESIGN_WORKSPACE)
     if workspace is None or workspace.activate() is False:

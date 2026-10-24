@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,6 +21,7 @@ from fusion_mcp.protocol.wire import Request
 from tests.fakes.brep import FakeBody, fake_box_body
 from tests.fakes.fusion_features import make_ctx
 from tests.fakes.fusion_sheet_metal import (
+    FakeFlatPatternProduct,
     fake_sheet_metal_design,
     install_sheet_metal_app,
     make_sheet_metal,
@@ -288,6 +290,37 @@ def test_create_rule_fusion_error_deletes_copy(monkeypatch: pytest.MonkeyPatch) 
     assert rules.names == []
 
 
+def test_rules_of_a_design_without_sheet_metal_data() -> None:
+    """A fresh live design (c15 6.1): reading ``designSheetMetalRules`` raises ``smDataRoot``
+    and the first ``addByCopy`` raises it too but adds the rule."""
+    s = Setup()
+    rules = s.design.designSheetMetalRules
+    rules.no_data = True
+    listed = s.run(h.sheet_metal_list_rules, {})
+    assert [r["source"] for r in listed["rules"]] == ["library", "library"]
+    result = s.run(h.sheet_metal_create_rule, {"name": "Steel 2mm", "thickness": 2})
+    assert result["rule"]["name"] == "Steel 2mm"
+    assert result["rule"]["thickness"]["mm"] == pytest.approx(2.0)
+    assert rules.no_data is False and rules.names == ["Steel 2mm"]
+    assert s.run(h.sheet_metal_assign_rule, {"rule": "Steel 2mm"})["rule"]["name"] == "Steel 2mm"
+
+
+def test_assign_library_rule_in_a_design_without_sheet_metal_data() -> None:
+    s = Setup()
+    s.design.designSheetMetalRules.no_data = True
+    result = s.run(h.sheet_metal_assign_rule, {"rule": "Steel"})
+    assert result["copied_from_library"] is True
+    assert s.root.activeSheetMetalRule is s.design.designSheetMetalRules.itemByName("Steel")
+
+
+def test_other_rule_errors_still_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    s = Setup()
+    rules = s.design.designSheetMetalRules
+    rules.copy_error = "3 : no rights"
+    err = s.error(h.sheet_metal_create_rule, {"name": "X"})
+    assert err.code is ErrorCode.FUSION_API_ERROR and "no rights" in err.message
+
+
 def test_create_rule_unknown_base() -> None:
     err = Setup().error(h.sheet_metal_create_rule, {"name": "X", "base_rule": "Brass"})
     assert err.code is ErrorCode.ENTITY_NOT_FOUND
@@ -434,7 +467,8 @@ def test_contour_flange_one_side_40mm() -> None:
     s.flanges.will_create(make_sheet_metal(FakeBody("Contour")))
     result = s.run(h.sheet_metal_contour_flange, {"profiles": ["line1", "line2"], "distance": 40})
     inp = s.flanges.last_input
-    profile, distance = inp.create_args
+    profiles, distance = inp.create_args
+    (profile,) = profiles  # a list: the live API takes std::vector<Profile> (c15 6.1)
     assert profile.method == "createOpenProfile" and profile.entities == [s.line1, s.line2]
     assert real(distance) == pytest.approx(4.0)
     (one_side,) = inp.call("setOneSideDirection")
@@ -724,6 +758,54 @@ def test_create_flat_pattern() -> None:
     assert result["replaced"] is False
     assert s.app.activeProduct is s.design
     assert s.app.userInterface.workspaces.itemById("FusionSolidEnvironment").activations == 1
+
+
+class SameDesign:
+    """A new API wrapper of the design: ``==`` to it but not the same object (live Fusion)."""
+
+    def __init__(self, design: Any) -> None:
+        self.design = design
+
+    def __eq__(self, other: object) -> bool:
+        return other is self.design or other is self
+
+    __hash__ = object.__hash__
+
+
+class Workspace:
+    def __init__(self, workspace_id: str) -> None:
+        self.id = workspace_id
+        self.activations = 0
+
+    def activate(self) -> bool:
+        self.activations += 1
+        return False  # live Fusion: activating the active workspace answers False
+
+
+def _live_ctx(product: Any, active: str) -> Any:
+    workspace = Workspace(h.DESIGN_WORKSPACE)
+    ui = SimpleNamespace(
+        activeWorkspace=Workspace(active) if active != h.DESIGN_WORKSPACE else workspace,
+        workspaces=SimpleNamespace(itemById=lambda _id: workspace),
+    )
+    return SimpleNamespace(app=SimpleNamespace(activeProduct=product), ui=ui), workspace
+
+
+def test_back_to_design_live_stays_in_the_design() -> None:
+    """On the live Fusion (c15 6.1) ``createFlatPattern`` leaves the design the active product
+    (a new wrapper on each access: ``==``, never ``is``) and the design workspace active,
+    whose ``activate()`` answers ``False``: no activation, no error."""
+    design = object()
+    ctx, workspace = _live_ctx(SameDesign(design), "FlatPatternEnvironment")
+    h._back_to_design(ctx, design)
+    assert workspace.activations == 0
+    ctx, workspace = _live_ctx(FakeFlatPatternProduct(None), h.DESIGN_WORKSPACE)  # type: ignore[arg-type]
+    h._back_to_design(ctx, design)
+    assert workspace.activations == 0
+    ctx, workspace = _live_ctx(FakeFlatPatternProduct(None), "FlatPatternEnvironment")  # type: ignore[arg-type]
+    with pytest.raises(BridgeError, match="could not return to the design workspace"):
+        h._back_to_design(ctx, design)
+    assert workspace.activations == 1
 
 
 def test_create_flat_pattern_existing() -> None:
