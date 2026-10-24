@@ -31,6 +31,9 @@ Units = LengthUnit
 
 LoftEnd = Literal["free", "tangent", "smooth", "direction", "point_sharp", "point_tangent"]
 ThreadLocation = Literal["high", "low"]
+SweepOrientation = Literal["perpendicular", "parallel"]
+RailScaling = Literal["scale", "stretch", "none"]
+RibThicknessLocation = Literal["symmetric", "side1", "side2"]
 
 DEFAULT_THREAD_TYPE = "ISO Metric profile"
 DEFAULT_TIP_ANGLE = 118.0
@@ -233,6 +236,21 @@ class LoftSection(_Model):
                 f"`weight` applies only to end_condition in {', '.join(_WEIGHTED_ENDS)}"
             )
         return self
+
+
+# --- rib / web (D14) -------------------------------------------------------------------------
+
+
+class RibToNext(_Model):
+    type: Literal["to_next"]
+
+
+class RibDistance(_Model):
+    type: Literal["distance"]
+    distance: Annotated[Length, Field(description="Depth of the rib/web from the sketch curves")]
+
+
+RibDepth = Annotated[RibToNext | RibDistance, Field(discriminator="type")]
 
 
 # --- hole (D15) ------------------------------------------------------------------------------

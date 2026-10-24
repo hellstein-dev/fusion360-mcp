@@ -618,3 +618,102 @@ def test_error_feature_is_rolled_back_by_dispatcher() -> None:
     assert response.ok is False
     assert design.timeline.names() == timeline_before
     assert list(root.features.filletFeatures) == []
+
+
+# --- 6.1 make_path -------------------------------------------------------------------------
+
+
+def _path_setup(*bodies: Any) -> tuple[Any, Any, list[Any], list[Any]]:
+    """Design, root, an open chain of two sketch lines and a separate line (all on XZ)."""
+    design = fake_feature_design(*bodies)
+    sketch = make_sketch(design, "XZ")
+    chain = polygon_curves(sketch, [(0, 0), (0, 5), (3, 8)], closed=False)
+    lone = polygon_curves(sketch, [(6, 0), (6, 4)], closed=False)
+    return design, design.rootComponent, chain, lone
+
+
+def _path_ctx(design: Any, curves: list[Any]) -> Any:
+    return make_ctx(design, {}, {c.entityToken: c for c in curves})
+
+
+def test_make_path_one_curve_with_chain_takes_the_connected_curves() -> None:
+    design, root, chain, lone = _path_setup()
+    ctx = _path_ctx(design, [*chain, *lone])
+    path = fx.make_path(ctx, root, [chain[0].entityToken], chain=True)
+    assert path is root.features.paths[-1]
+    assert isinstance(path.curves, adsk.core.ObjectCollection)
+    assert list(path.curves) == chain
+    assert path.isChain is False
+    single = fx.make_path(ctx, root, [chain[0].entityToken], chain=False)
+    assert single.curves is chain[0] and single.isChain is False
+    alone = fx.make_path(ctx, root, [lone[0].entityToken], chain=True)
+    assert alone.curves is lone[0]
+
+
+def test_make_path_several_curves_without_duplicates() -> None:
+    design, root, chain, lone = _path_setup()
+    ctx = _path_ctx(design, [*chain, *lone])
+    refs = [chain[0].entityToken, chain[1].entityToken, chain[0].entityToken]
+    path = fx.make_path(ctx, root, refs, chain=False)
+    assert list(path.curves) == chain
+
+
+def test_make_path_edges() -> None:
+    box = fake_box_body(1, 1, 1)
+    design, root, _, _ = _path_setup(box)
+    ctx = make_ctx(design, {})
+    edge = box.edges.item(0)
+    path = fx.make_path(ctx, root, [edge.entityToken], chain=True)
+    assert path.curves is edge and path.isChain is True
+    path = fx.make_path(ctx, root, [edge.entityToken], chain=False)
+    assert path.isChain is False
+    two = [box.edges.item(0).entityToken, box.edges.item(1).entityToken]
+    path = fx.make_path(ctx, root, two, chain=True)
+    assert list(path.curves) == [box.edges.item(0), box.edges.item(1)]
+    assert path.isChain is False
+
+
+def test_make_path_mixing_curves_and_edges_is_invalid() -> None:
+    box = fake_box_body(1, 1, 1)
+    design, root, chain, _ = _path_setup(box)
+    ctx = _path_ctx(design, chain)
+    error = _error(
+        fx.make_path, ctx, root, [chain[0].entityToken, box.edges.item(0).entityToken], True, "rail"
+    )
+    assert error.code is ErrorCode.INVALID_PARAMS
+    assert error.details["param"] == "rail"
+    assert error.details["reason"] == "mixed_path"
+    assert root.features.paths == []
+
+
+def test_make_path_invalid_input() -> None:
+    box = fake_box_body(1, 1, 1)
+    design, root, chain, _ = _path_setup(box)
+    ctx = _path_ctx(design, chain)
+    bad: tuple[Any, ...] = ([], None, "x")
+    for refs in bad:
+        error = _error(fx.make_path, ctx, root, refs)
+        assert error.code is ErrorCode.INVALID_PARAMS
+        assert error.details["param"] == "path"
+    error = _error(fx.make_path, ctx, root, [box.faces.item(0).entityToken])
+    assert error.details == {
+        "param": "path",
+        "ref": box.faces.item(0).entityToken,
+        "expected": list(fx.PATH_TYPES),
+        "actual": "BRepFace (plane)",
+        "index": 0,
+    }
+    error = _error(fx.make_path, ctx, root, ["gone"])
+    assert error.code is ErrorCode.ENTITY_NOT_FOUND
+    assert error.details["param"] == "path"
+    assert root.features.paths == []
+
+
+def test_make_path_fusion_failure_is_fusion_api_error() -> None:
+    design, root, chain, _ = _path_setup()
+    ctx = _path_ctx(design, chain)
+    root.features.path_error = "gap between curves"
+    error = _error(fx.make_path, ctx, root, [chain[0].entityToken, chain[1].entityToken])
+    assert error.code is ErrorCode.FUSION_API_ERROR
+    assert "gap between curves" in error.message
+    assert error.details == {"param": "path", "count": 2}

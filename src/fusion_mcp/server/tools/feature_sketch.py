@@ -1,4 +1,5 @@
-"""``feature_*`` tools for sketch-based solid features (c07 D1, D10, D11): extrude, revolve.
+"""``feature_*`` tools for sketch-based solid features (c07 D1, D10-D14): extrude, revolve,
+sweep, loft, rib and web.
 
 Inputs are the shared models of ``_feature_models.py`` (D20); the add-in handlers live in
 ``fusion_addin/handlers/feature_sketch.py``. Cheap cross-field rules (which extent fields a
@@ -23,11 +24,17 @@ from fusion_mcp.server.tools._feature_models import (
     DistanceExtent,
     Extent,
     ExtrudeMode,
+    Length,
+    LoftSection,
     Operation,
     ProfileSpec,
+    RailScaling,
     Ref,
     RevolveExtent,
+    RibDepth,
+    RibThicknessLocation,
     StartExtent,
+    SweepOrientation,
     ThinOptions,
     Units,
     to_params,
@@ -54,6 +61,26 @@ Participants = Annotated[
     ),
 ]
 UnitsArg = Annotated[Units, Field(description="Unit of plain-number lengths and points")]
+RibCurves = Annotated[
+    list[Ref],
+    Field(
+        min_length=1,
+        description="Open sketch curve refs (sketch_draw), drawn on a plane through the body, "
+        "ending at or near its walls",
+    ),
+]
+RibLocationArg = Annotated[
+    RibThicknessLocation,
+    Field(description="symmetric (default) about the curves, or side1 / side2 of them"),
+]
+RibDepthArg = Annotated[
+    RibDepth | None,
+    Field(
+        description='{"type": "to_next"} (default, up to the next face) | '
+        '{"type": "distance", "distance"}'
+    ),
+]
+RibFlip = Annotated[bool, Field(description="Grow the other way from the sketch plane")]
 
 
 def _invalid(message: str, **details: Any) -> BridgeError:
@@ -104,6 +131,25 @@ def _check_extrude(
             param="side1.type",
             value=getattr(side1, "type", None),
             expected=["distance"],
+        )
+
+
+def _is_zero(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and value == 0
+
+
+def _check_sweep(
+    guide_rail: list[str] | None, twist_angle: Any, taper_angle: Any, rail_scaling: str
+) -> None:
+    """Guide-rail rules of ``feature_sweep`` (D12); the add-in applies the same rules."""
+    if guide_rail is not None:
+        for name, value in (("twist_angle", twist_angle), ("taper_angle", taper_angle)):
+            if not _is_zero(value):
+                raise _invalid(f"parameter '{name}' cannot be used with guide_rail", param=name)
+    elif rail_scaling != "scale":
+        raise _invalid(
+            "parameter 'rail_scaling' applies only together with guide_rail",
+            param="rail_scaling",
         )
 
 
@@ -278,3 +324,263 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
             units=units,
         )
         return await call_bridge(bridge, "feature.revolve", params)
+
+    @mcp.tool(name="feature_sweep")
+    async def feature_sweep(
+        profiles: Profiles,
+        path: Annotated[
+            list[Ref],
+            Field(
+                min_length=1,
+                description="Sweep path: sketch curve refs (sketch_draw) or BRep edge refs "
+                "(inspect_query) - one kind only",
+            ),
+        ],
+        path_chain: Annotated[
+            bool,
+            Field(
+                description="true (default): extend each path/rail curve to every curve "
+                "connected to it end to end (tangent chain for a single edge)"
+            ),
+        ] = True,
+        guide_rail: Annotated[
+            list[Ref] | None,
+            Field(
+                min_length=1,
+                description="Optional guide rail (sketch curves or edges) that steers and "
+                "scales the profile; excludes twist_angle and taper_angle",
+            ),
+        ] = None,
+        rail_scaling: Annotated[
+            RailScaling,
+            Field(description="With guide_rail: scale (default), stretch or none"),
+        ] = "scale",
+        orientation: Annotated[
+            SweepOrientation,
+            Field(
+                description="perpendicular (default, the profile follows the path) or "
+                "parallel (keeps its orientation)"
+            ),
+        ] = "perpendicular",
+        twist_angle: Annotated[
+            Angle, Field(description="Twist over the whole path, degrees (no guide_rail)")
+        ] = 0.0,
+        taper_angle: Annotated[
+            Angle, Field(description="Taper of the profile, degrees (no guide_rail)")
+        ] = 0.0,
+        path_extent: Annotated[
+            float,
+            Field(gt=0, le=1, description="Share of the path to sweep along, (0, 1]"),
+        ] = 1.0,
+        flip: Annotated[bool, Field(description="Sweep the other way along the path")] = False,
+        operation: OperationArg = "new_body",
+        participant_bodies: Participants = None,
+        units: UnitsArg = "mm",
+    ) -> CallToolResult:
+        """Sweep sketch profiles or planar faces along a path - pipes, handles, springs
+        (with twist), rails, swept cuts (operation="cut").
+
+        Units: angles in degrees (a string is a Fusion expression, e.g. "pitch_angle");
+        path_extent is a plain share of the path length; `units` only applies to
+        {"sketch", "point"} profile specs. Refs: profiles from sketch_draw / sketch_profiles;
+        path and guide rail from sketch_draw (sketch curve refs, the path sketch usually lies
+        on a plane perpendicular to the profile sketch) or BRep edges from inspect_query.
+        Do not mix sketch curves and edges in one path. With path_chain=true one curve
+        is enough to take the whole connected chain.
+
+        Rules: twist_angle / taper_angle with guide_rail -> INVALID_PARAMS; path_extent
+        outside (0, 1] -> rejected; a path with gaps -> FUSION_API_ERROR. A feature Fusion
+        computes with an error -> FUSION_API_ERROR and the timeline is rolled back; a warning
+        keeps the feature and is reported in `health`.
+
+        Returns {"feature": {ref, type, name}, "health": {"state": ok|warning|error|unknown,
+        "message"}, "created_bodies": [{ref, type, name}], "modified_bodies": [{ref, type,
+        name}], "removed_bodies": [<refs of bodies consumed by join/cut>], "component"?:
+        {ref, type, name} (new_component only)}.
+
+        Examples:
+        - feature_sweep(profiles=["profile:<sk>@0,0"], path=[<path line ref>, <arc ref>])
+        - feature_sweep(profiles=[...], path=[<helix-like spline ref>], twist_angle=360)
+        - feature_sweep(profiles=[...], path=[<edge ref>], guide_rail=[<curve ref>],
+          rail_scaling="stretch")
+        """
+        try:
+            _check_sweep(guide_rail, twist_angle, taper_angle, rail_scaling)
+        except BridgeError as error:
+            return error_result(error)
+        with_rail = guide_rail is not None
+        params = to_params(
+            profiles=profiles,
+            path=path,
+            path_chain=path_chain,
+            guide_rail=guide_rail,
+            rail_scaling=rail_scaling if with_rail else None,
+            orientation=orientation,
+            twist_angle=None if with_rail else twist_angle,
+            taper_angle=None if with_rail else taper_angle,
+            path_extent=path_extent,
+            flip=flip,
+            operation=operation,
+            participant_bodies=participant_bodies,
+            units=units,
+        )
+        return await call_bridge(bridge, "feature.sweep", params)
+
+    @mcp.tool(name="feature_loft")
+    async def feature_loft(
+        sections: Annotated[
+            list[LoftSection],
+            Field(
+                min_length=2,
+                description='Sections in order: {"entity", "end_condition"=free, "angle"=0, '
+                '"weight"=1}. entity = one profile (ref or spec), a planar face ref, or a '
+                "point (sketch point, construction point, vertex) - points only first/last",
+            ),
+        ],
+        rails: Annotated[
+            list[Ref] | None,
+            Field(description="Rail curves/edges guiding the loft (not with centerline)"),
+        ] = None,
+        centerline: Annotated[
+            Ref | None,
+            Field(description="Centerline curve/edge the sections follow (not with rails)"),
+        ] = None,
+        closed: Annotated[
+            bool, Field(description="Close the loft back to the first section (no points)")
+        ] = False,
+        merge_tangent_edges: Annotated[
+            bool, Field(description="Merge tangent edges of the result (default true)")
+        ] = True,
+        operation: OperationArg = "new_body",
+        participant_bodies: Participants = None,
+        units: UnitsArg = "mm",
+    ) -> CallToolResult:
+        """Loft a solid through two or more sections - transitions, ducts, bottle necks,
+        domes ending in a point.
+
+        Sections: each is exactly one profile ('profile:<sketch>@x,y' or a {"sketch", ...}
+        spec selecting one region), a planar face (inspect_query), or a point - a sketch
+        point, construction point (construction_point, origin:O) or vertex - which may only
+        be the first or the last section. End conditions: free (default), tangent / smooth
+        (with weight), direction (angle in degrees + weight), point_sharp / point_tangent
+        (point sections only). Inner sections keep free unless asked otherwise.
+
+        Guides: rails (sketch curves or edges touching every section) or one centerline,
+        never both. closed=true joins the last section back to the first (needs 3+ profile
+        sections and no point section).
+
+        Units: angles in degrees, weights plain numbers; `units` only applies to
+        {"sketch", "point"} profile specs. Errors: fewer than 2 sections, rails with a
+        centerline, a point in the middle, point_* on a profile, closed with a point, more
+        than one profile in a section -> INVALID_PARAMS (nothing changed); a feature Fusion
+        computes with an error -> FUSION_API_ERROR and the timeline is rolled back.
+
+        Returns {"feature": {ref, type, name}, "health": {"state": ok|warning|error|unknown,
+        "message"}, "created_bodies": [{ref, type, name}], "modified_bodies": [{ref, type,
+        name}], "removed_bodies": [<refs of bodies consumed by join/cut>], "component"?:
+        {ref, type, name} (new_component only)}.
+
+        Examples:
+        - feature_loft(sections=[{"entity": "profile:<sk1>@0,0"}, {"entity":
+          "profile:<sk2>@0,0"}], rails=[<rail curve ref>])
+        - feature_loft(sections=[{"entity": <face ref>, "end_condition": "tangent"},
+          {"entity": <sketch point ref>, "end_condition": "point_tangent", "weight": 2}],
+          operation="join")
+        """
+        if rails and centerline is not None:
+            return error_result(
+                _invalid(
+                    "parameters 'rails' and 'centerline' cannot be used together",
+                    param="centerline",
+                    reason="rails_and_centerline",
+                )
+            )
+        params = to_params(
+            sections=sections,
+            rails=rails or None,
+            centerline=centerline,
+            closed=closed,
+            merge_tangent_edges=merge_tangent_edges,
+            operation=operation,
+            participant_bodies=participant_bodies,
+            units=units,
+        )
+        return await call_bridge(bridge, "feature.loft", params)
+
+    @mcp.tool(name="feature_rib")
+    async def feature_rib(
+        curves: RibCurves,
+        thickness: Annotated[Length, Field(description="Rib thickness")],
+        thickness_location: RibLocationArg = "symmetric",
+        depth: RibDepthArg = None,
+        flip: RibFlip = False,
+        units: UnitsArg = "mm",
+    ) -> CallToolResult:
+        """Add a rib (a thin stiffening wall) from open sketch curves, joined to the body
+        it meets - gussets in housings, brackets, bosses.
+
+        Units: thickness and depth.distance are in `units` (default mm), a string is a
+        Fusion expression ("wall"). Refs: open sketch curves from sketch_draw (a line or arc
+        drawn in a sketch on a plane cutting the body, e.g. a construction_plane through the
+        corner); circles and closed splines are refused. The rib is always joined to the
+        existing body (no operation parameter).
+
+        Errors: closed curve, wrong thickness_location or depth -> INVALID_PARAMS (nothing
+        changed); a Fusion API version without rib features -> FUSION_API_ERROR "not
+        available" with no change (use execute_python then); a rib Fusion computes with an
+        error -> FUSION_API_ERROR and the timeline is rolled back.
+
+        Returns {"feature": {ref, type, name}, "health": {"state": ok|warning|error|unknown,
+        "message"}, "created_bodies": [...], "modified_bodies": [{ref, type, name}] (the body
+        the rib joins), "removed_bodies": [...]}.
+
+        Example: feature_rib(curves=[<sketch line ref>], thickness=3)
+        """
+        params = to_params(
+            curves=curves,
+            thickness=thickness,
+            thickness_location=thickness_location,
+            depth=depth,
+            flip=flip,
+            units=units,
+        )
+        return await call_bridge(bridge, "feature.rib", params)
+
+    @mcp.tool(name="feature_web")
+    async def feature_web(
+        curves: RibCurves,
+        thickness: Annotated[Length, Field(description="Wall thickness of the web")],
+        thickness_location: RibLocationArg = "symmetric",
+        depth: RibDepthArg = None,
+        flip: RibFlip = False,
+        units: UnitsArg = "mm",
+    ) -> CallToolResult:
+        """Add a web - a network of thin walls from several open sketch curves (e.g. a grid
+        of stiffeners inside a shelled housing), joined to the body it meets.
+
+        Units: thickness and depth.distance are in `units` (default mm), a string is a
+        Fusion expression. Refs: open sketch curves from sketch_draw, all in one sketch
+        inside the body; circles and closed splines are refused. Always joined to the body
+        (no operation parameter).
+
+        Errors: closed curve, wrong thickness_location or depth -> INVALID_PARAMS (nothing
+        changed); a Fusion API version without web features -> FUSION_API_ERROR "not
+        available" with no change (use execute_python then); a web Fusion computes with an
+        error -> FUSION_API_ERROR and the timeline is rolled back.
+
+        Returns {"feature": {ref, type, name}, "health": {"state": ok|warning|error|unknown,
+        "message"}, "created_bodies": [...], "modified_bodies": [{ref, type, name}] (the body
+        the web joins), "removed_bodies": [...]}.
+
+        Example: feature_web(curves=[<line1 ref>, <line2 ref>, <line3 ref>], thickness=2,
+        depth={"type": "distance", "distance": 15})
+        """
+        params = to_params(
+            curves=curves,
+            thickness=thickness,
+            thickness_location=thickness_location,
+            depth=depth,
+            flip=flip,
+            units=units,
+        )
+        return await call_bridge(bridge, "feature.web", params)

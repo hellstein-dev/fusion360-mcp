@@ -242,3 +242,33 @@ def test_fake_refs_unknown_ref_is_entity_not_found() -> None:
     assert info.value.details == {"ref": "gone-token"}
     assert isinstance(ctx.refs, FakeRefs)
     assert ctx.refs.resolved == ["gone-token"]
+
+
+def test_create_path_records_paths_and_can_fail() -> None:
+    component = install_features(FakeComponent())
+    features = component.features
+    path = features.createPath("curve", True)
+    assert features.paths == [path]
+    assert path.objectType == "adsk::fusion::Path"
+    assert path.entities == ["curve"] and path.isChain is True
+    collection = adsk.core.ObjectCollection.createWithArray(["a", "b"])
+    assert features.createPath(collection, False).entities == ["a", "b"]
+    features.path_error = "gap"
+    with pytest.raises(RuntimeError, match="gap"):
+        features.createPath("curve", True)
+
+
+def test_loft_input_has_sections_and_guides() -> None:
+    component = install_features(FakeComponent())
+    lofts = component.features.loftFeatures
+    inp = lofts.createInput(OPS.NewBodyFeatureOperation)
+    section = inp.loftSections.add("profile")
+    assert section.create_args == ("profile",) and section.entity == "profile"
+    section.setTangentEndCondition(2)
+    assert section.calls == [("setTangentEndCondition", (2,))]
+    assert list(inp.loftSections) == [section]
+    inp.centerLineOrRails.addRail("rail")
+    assert inp.centerLineOrRails.calls == [("addRail", ("rail",))]
+    assert inp.sets == {}
+    other = component.features.extrudeFeatures.createInput("p", OPS.NewBodyFeatureOperation)
+    assert "loftSections" not in other.attrs

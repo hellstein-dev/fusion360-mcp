@@ -21,6 +21,19 @@ START_TYPES = ("profile_plane", "offset", "entity")
 THIN_LOCATIONS = ("side1", "side2", "center")
 # The ``health.state`` of feature results; the same words as ``health`` in c03 descriptions.
 HEALTH_STATES = ("ok", "warning", "error", "unknown")
+# Sweep (D12), loft (D13), rib/web (D14).
+SWEEP_ORIENTATIONS = ("perpendicular", "parallel")
+RAIL_SCALINGS = ("scale", "stretch", "none")
+LOFT_END_CONDITIONS = (
+    "free",
+    "tangent",
+    "smooth",
+    "direction",
+    "point_sharp",
+    "point_tangent",
+)
+RIB_THICKNESS_LOCATIONS = ("symmetric", "side1", "side2")
+RIB_DEPTH_TYPES = ("to_next", "distance")
 
 
 def check_choice(name: str, value: Any, choices: Sequence[str]) -> str:

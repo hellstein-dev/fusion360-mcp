@@ -5,7 +5,8 @@
   ``fusion_mcp.protocol.units`` (request units -> cm, degrees -> radians), strings are Fusion
   expressions passed through unchanged.
 - Inputs (D3): ``resolve_many`` (refs -> entities of allowed types), ``object_collection``,
-  ``feature_profiles`` (c05 profile specs, planar faces, sketch texts).
+  ``feature_profiles`` (c05 profile specs, planar faces, sketch texts); ``make_path`` (D12,
+  sweep paths and guide rails from sketch curves or edges).
 - Operation and participants (D5): ``operation_enum``, ``participant_bodies``,
   ``apply_participants``.
 - Extents (D6): ``extent_definition``, ``start_definition``, ``direction_enum``.
@@ -36,7 +37,7 @@ from fusion_mcp.protocol.features import (
 from fusion_mcp.protocol.sketch_refs import is_profile_ref
 from fusion_mcp.protocol.units import Units, angle_to_internal, length_to_internal
 
-from ..sketch.profiles import resolve_profiles
+from ..sketch.profiles import resolve_curves, resolve_profiles
 from ..sketch.resolve import CURVE_TYPES, TEXT_TYPES
 from .entity_kinds import describe_kind, is_face, is_planar
 from .health import check_health
@@ -261,6 +262,66 @@ def object_collection(items: Iterable[Any]) -> Any:
     for item in items:
         collection.add(item)
     return collection
+
+
+EDGE = "BRepEdge"
+PATH_TYPES: tuple[str, ...] = (*CURVE_TYPES, EDGE)
+
+
+def make_path(ctx: Any, component: Any, refs: Any, chain: bool = True, param: str = "path") -> Any:
+    """Sweep path / guide rail (D12) from a non-empty list of refs to sketch curves **or**
+    BRep edges (never both: ``INVALID_PARAMS`` with ``reason = "mixed_path"``).
+
+    Sketch curves go through c05 ``sketch.profiles.resolve_curves`` (``chain`` extends each
+    curve to every curve connected end to end) and become
+    ``component.features.createPath(<curve | ObjectCollection>, False)`` - the chain is
+    already expanded. A single edge is ``createPath(edge, chain)`` (Fusion chains tangent
+    edges); several edges are ``createPath(ObjectCollection, False)``. ``createPath`` creates
+    no timeline item; a set Fusion cannot join into one path (a gap) -> ``FUSION_API_ERROR``.
+    """
+    if not isinstance(refs, list | tuple) or not refs:
+        raise _invalid(
+            f"parameter '{param}' must be a non-empty list of sketch curve or edge refs",
+            param=param,
+            expected=["SketchCurve", EDGE],
+            reason="empty",
+        )
+    entities = [resolve_one(ctx, ref, PATH_TYPES, param, index) for index, ref in enumerate(refs)]
+    edges = [type_name(e) == EDGE for e in entities]
+    if any(edges) and not all(edges):
+        raise _invalid(
+            f"parameter '{param}' mixes sketch curves and edges; build the path from one kind",
+            param=param,
+            reason="mixed_path",
+            expected=["SketchCurve", EDGE],
+        )
+    if all(edges):
+        items = resolve_many(ctx, list(refs), (EDGE,), param)
+        args: tuple[Any, bool] = (
+            (items[0], chain) if len(items) == 1 else (object_collection(items), False)
+        )
+    else:
+        try:
+            items = resolve_curves(ctx, list(refs), chain)
+        except BridgeError as exc:
+            exc.details.setdefault("param", param)
+            raise
+        args = (items[0], False) if len(items) == 1 else (object_collection(items), False)
+    try:
+        path = component.features.createPath(*args)
+    except RuntimeError as exc:
+        raise BridgeError(
+            ErrorCode.FUSION_API_ERROR,
+            f"Fusion could not build a path from '{param}': {exc}",
+            {"param": param, "count": len(items)},
+        ) from None
+    if path is None:
+        raise BridgeError(
+            ErrorCode.FUSION_API_ERROR,
+            f"Fusion could not build a path from '{param}'",
+            {"param": param, "count": len(items)},
+        )
+    return path
 
 
 def feature_profiles(

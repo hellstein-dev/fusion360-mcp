@@ -18,7 +18,9 @@ Builds on the c03 fakes (``tests/fakes/brep.py``: ``FakeComponent``, ``FakeBody`
   without recording it; ``returns[name]`` is what a method call returns (default ``True``);
   names in ``missing`` behave as absent (``hasattr`` is false) to test fallbacks.
 - ``install_features(component, design, omit=())`` hangs ``component.features`` with all
-  collections (``omit`` drops some, e.g. ``ribFeatures`` of an older Fusion API).
+  collections (``omit`` drops some, e.g. ``ribFeatures`` of an older Fusion API) and
+  ``createPath`` (-> ``FakePath``, recorded in ``features.paths``). A loft input comes with
+  ``loftSections`` (``FakeLoftSections``) and a recording ``centerLineOrRails``.
 - ``make_ctx(design, params, refs)`` is a ``Context`` over a fake app whose ref resolver
   first looks refs up in ``refs`` (ref -> entity, for entities without a token of their own),
   then in the design, and records every resolved ref.
@@ -193,6 +195,7 @@ class FakeFeatureCollection(FakeCollection):
             if self.create_error is not None:
                 raise RuntimeError(self.create_error)
             inp = FakeFeatureInput(self, name, args)
+            _prepare_input(self, name, inp)
             self.inputs.append(inp)
             return inp
 
@@ -287,14 +290,51 @@ class FakeFeatureCollection(FakeCollection):
         feature.deleteMe = delete_me
 
 
+class FakeLoftSections(FakeCollection):
+    """``LoftFeatureInput.loftSections``: ``add(entity)`` -> a recording ``FakeFeatureInput``
+    (the ``LoftSection``; its ``create_args`` is ``(entity,)``)."""
+
+    def add(self, entity: Any) -> FakeFeatureInput:
+        section = FakeFeatureInput(None, "add", (entity,))
+        section.provide("entity", entity)
+        self._items.append(section)
+        return section
+
+
+class FakePath:
+    """``Path`` built by ``Features.createPath(curves, isChain)``."""
+
+    objectType = "adsk::fusion::Path"
+
+    def __init__(self, curves: Any, is_chain: bool) -> None:
+        self.curves = curves
+        self.isChain = is_chain
+
+    @property
+    def entities(self) -> list[Any]:
+        if isinstance(self.curves, adsk.core.ObjectCollection):
+            return list(self.curves)
+        return [self.curves]
+
+
+def _prepare_input(collection: FakeFeatureCollection, method: str, inp: FakeFeatureInput) -> None:
+    """Sub-objects a real input has right after creation (not logged as sets)."""
+    if collection.kind == "LoftFeature" and method == "createInput":
+        inp.provide("loftSections", FakeLoftSections())
+        inp.provide("centerLineOrRails", FakeFeatureInput(None, "centerLineOrRails"))
+
+
 class FakeFeatures:
     """``component.features``: one ``FakeFeatureCollection`` per ``FEATURE_COLLECTIONS``
-    attribute, except the omitted ones (absent, like in an older Fusion API)."""
+    attribute, except the omitted ones (absent, like in an older Fusion API), and
+    ``createPath`` (records ``paths``; ``path_error`` makes it raise ``RuntimeError``)."""
 
     def __init__(
         self, component: Any, design: FakeDesign | None = None, omit: Iterable[str] = ()
     ) -> None:
         self.component = component
+        self.paths: list[FakePath] = []
+        self.path_error: str | None = None
         skipped = set(omit)
         unknown = skipped - set(FEATURE_COLLECTIONS)
         if unknown:
@@ -302,6 +342,13 @@ class FakeFeatures:
         for attr, (kind, prefix, methods) in FEATURE_COLLECTIONS.items():
             if attr not in skipped:
                 setattr(self, attr, FakeFeatureCollection(component, design, kind, prefix, methods))
+
+    def createPath(self, curves: Any, isChain: bool = True) -> FakePath:
+        if self.path_error is not None:
+            raise RuntimeError(self.path_error)
+        path = FakePath(curves, isChain)
+        self.paths.append(path)
+        return path
 
     def collections(self) -> dict[str, FakeFeatureCollection]:
         return {attr: getattr(self, attr) for attr in FEATURE_COLLECTIONS if hasattr(self, attr)}
