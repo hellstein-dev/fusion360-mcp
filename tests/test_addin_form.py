@@ -121,8 +121,41 @@ def test_box_40_20_10_new_form() -> None:
     assert (origin.x, origin.y, origin.z) == (0, 0, 0)
     assert (x_dir.x, y_dir.y) == (1.0, 1.0)
     assert out["body"]["brep_body"] is not None and out["form"] == form.entityToken
-    assert form.log[:2] == ["finishEdit", "updateBRep"]
+    # The body is added inside an edit session (live Fusion keeps it only there, c15 6.2).
+    assert form.log[:3] == ["startEdit", "finishEdit", "updateBRep"]
     assert out["body"]["type"] == "TSplineBody"
+
+
+def test_box_live_fusion_edit_mode_and_token_lookup() -> None:
+    # Live Fusion (c15 6.2): a body is kept only when added in edit mode, ``finishEdit``
+    # outside edit mode raises "form not active", T-spline tokens are not found by
+    # ``findEntityByToken``.
+    s = Setup()
+    s.forms.live = True
+    out = s.run(h.form_create_primitive, {"shape": "box", "x_size": 10, "y_size": 10, "z_size": 10})
+    form = s.last_form()
+    assert form.tSplineBodies.count == 1
+    assert out["body"]["brep_body"] is not None
+    # The new body is addressed by its token through the form features.
+    listed = s.run(h.form_list, {})
+    tokens = [b["ref"] for f in listed["forms"] for b in f["bodies"]]
+    assert out["body"]["ref"] in tokens
+    from fusion_addin.core.refs import _tspline_lookup
+
+    assert _tspline_lookup(s.design, out["body"]["ref"]) is form.tSplineBodies.item(0)
+    assert _tspline_lookup(s.design, "no-such-token") is None
+
+
+def test_end_edit_outside_edit_mode() -> None:
+    from fusion_addin.core.form import end_edit
+
+    s = Setup()
+    s.forms.live = True
+    form = s.forms.add()
+    end_edit(form)  # "form not active" is swallowed
+    form.finish_error = "boom"
+    with pytest.raises(RuntimeError, match="boom"):
+        end_edit(form)
 
 
 def test_box_options() -> None:

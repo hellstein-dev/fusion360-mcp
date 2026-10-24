@@ -293,7 +293,26 @@ def _lookup(design: Any, ref: str) -> Any:
                 return occurrence
         return None
     found = design.findEntityByToken(ref)
-    return found[0] if found else None
+    if found:
+        return found[0]
+    return _tspline_lookup(design, ref)
+
+
+def _tspline_lookup(design: Any, ref: str) -> Any:
+    """The T-spline body whose ``entityToken`` is ``ref``. On the live Fusion (c15 6.2)
+    ``Design.findEntityByToken`` never finds a ``TSplineBody`` token (it finds the form feature
+    and the B-Rep body), while the token itself stays the same across edits; so the bodies of
+    every form feature are searched."""
+    components = _get(design, "allComponents")
+    for i in range(_get(components, "count") or 0):
+        forms = _get(_get(components.item(i), "features"), "formFeatures")
+        for j in range(_get(forms, "count") or 0):
+            bodies = _get(forms.item(j), "tSplineBodies")
+            for k in range(_get(bodies, "count") or 0):
+                body = bodies.item(k)
+                if _get(body, "entityToken") == ref:
+                    return body
+    return None
 
 
 class Refs:

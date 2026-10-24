@@ -47,6 +47,7 @@ from ..core.compensate import Compensation
 from ..core.features import point3d
 from ..core.form import (
     api_error,
+    begin_edit,
     describe_tsbody,
     element_position,
     elements,
@@ -166,6 +167,7 @@ def _add_body(ctx: Any, params: dict[str, Any], make: Any, what: str) -> dict[st
     name = _name(params)
     form, created = get_or_create_form(ctx, params.get("form"), params.get("component"))
     with regenerate_on_error(form), Compensation() as comp:
+        begin_edit(form)
         body = make(form.tSplineBodies)
         if body is None:
             raise api_error(f"Fusion did not create the T-spline body ({what})", reason=what)

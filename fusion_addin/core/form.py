@@ -180,8 +180,30 @@ def get_or_create_form(ctx: Any, form_ref: Any, component_ref: Any) -> tuple[Any
     return form, True
 
 
+# ``FormFeature.finishEdit`` on a form that is not in edit mode: the docs say nothing happens,
+# the live Fusion raises "3 : form not active" (c15 6.2).
+NOT_IN_EDIT = "form not active"
+
+
+def begin_edit(form: Any) -> None:
+    """Enter edit mode before adding T-spline bodies: on the live Fusion (c15 6.2) a body added
+    outside edit mode is returned but not kept (``tSplineBodies.count`` stays 0, no B-Rep);
+    added between ``startEdit`` and ``finishEdit`` it is kept and gets its B-Rep."""
+    if form.startEdit() is False:
+        raise api_error("Fusion did not enter the form edit mode")
+
+
+def end_edit(form: Any) -> None:
+    """Leave edit mode if the form is in it (a form not in edit mode is fine)."""
+    try:
+        form.finishEdit()
+    except RuntimeError as exc:
+        if NOT_IN_EDIT not in str(exc):
+            raise
+
+
 def _regenerate(form: Any) -> None:
-    form.finishEdit()
+    end_edit(form)
     form.updateBRep()
 
 

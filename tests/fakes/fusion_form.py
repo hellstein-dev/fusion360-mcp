@@ -279,8 +279,14 @@ class FakeTSplineBodies(FakeCollection):
         if self.add_none:
             return None
         body = build_box_mesh(FakeTSplineBody(self.form, f"Body{self.count + 1}"))
+        live = self.form.live
+        if live and not self.form.is_editing:
+            # Live Fusion (c15 6.2): returned, but not kept outside edit mode.
+            return body
         self.add(body)
-        if self.form.design is not None:
+        # ``live``: not registered for ``findEntityByToken`` - the live Fusion never finds a
+        # T-spline body by its token (c15 6.2), ``core.refs`` searches the form features.
+        if self.form.design is not None and not live:
             self.form.design.add_entity(body)
         return body
 
@@ -317,6 +323,10 @@ class FakeFormFeature:
         self.log: list[str] = []
         self.is_editing = False
         self.brep_mode = "ok"
+        # The live Fusion's behaviour (c15 6.2): ``finishEdit`` outside edit mode raises "form
+        # not active", a body added outside edit mode is not kept, T-spline body tokens are not
+        # found by ``findEntityByToken``.
+        self.live = collection.live
         self.finish_error: str | None = None
         self.update_error: str | None = None
         self.insert_error: str | None = None
@@ -334,6 +344,8 @@ class FakeFormFeature:
         self.log.append("finishEdit")
         if self.finish_error is not None:
             raise RuntimeError(self.finish_error)
+        if self.live and not self.is_editing:
+            raise RuntimeError("3 : form not active")  # live Fusion (c15 6.2)
         was_editing, self.is_editing = self.is_editing, False
         if was_editing and self.brep_mode in ("ok", "after_edit"):
             self._regenerate()
@@ -386,6 +398,7 @@ class FakeFormFeatures(FakeCollection):
         self.insert_edge = insert_edge
         self.add_error: str | None = None
         self.brep_mode = "ok"
+        self.live = False  # see ``FakeFormFeature.live``
 
     def add(self, item: Any = None) -> FakeFormFeature:
         if self.add_error is not None:
