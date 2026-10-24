@@ -1,6 +1,7 @@
 """MCP tool groups: each module has ``register(mcp, bridge)`` (design D10)."""
 
 from . import (
+    assembly,
     body,
     construction,
     design,
@@ -36,10 +37,12 @@ TOOL_MODULES = [
     pattern,
     body,
     timeline,
+    assembly,
 ]
 
 __all__ = [
     "TOOL_MODULES",
+    "assembly",
     "body",
     "construction",
     "design",

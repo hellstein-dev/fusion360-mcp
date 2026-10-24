@@ -55,6 +55,15 @@ class FakeMatrix:
         return [*r[0], t.x, *r[1], t.y, *r[2], t.z, 0.0, 0.0, 0.0, 1.0]
 
 
+class Proxyable:
+    """``createForAssemblyContext`` for native fakes: a ``FakeProxy`` (tests/fakes/assembly.py)."""
+
+    def createForAssemblyContext(self, occurrence: Any) -> Any:
+        from .assembly import FakeProxy
+
+        return FakeProxy(self, occurrence)
+
+
 # --- surfaces and curves --------------------------------------------------------------------
 
 
@@ -149,7 +158,7 @@ class FakeEvaluator:
         return True, self._normal.copy()
 
 
-class FakeVertex:
+class FakeVertex(Proxyable):
     objectType = "adsk::fusion::BRepVertex"
 
     def __init__(self, geometry: Any, token: str | None = None, body: Any = None) -> None:
@@ -159,7 +168,7 @@ class FakeVertex:
         self.edges = FakeCollection()
 
 
-class FakeEdge:
+class FakeEdge(Proxyable):
     objectType = "adsk::fusion::BRepEdge"
 
     def __init__(
@@ -185,7 +194,7 @@ class FakeEdge:
         self.boundingBox = bounding_box or bbox_of(ends or [point_on_edge])
 
 
-class FakeFace:
+class FakeFace(Proxyable):
     objectType = "adsk::fusion::BRepFace"
 
     def __init__(
@@ -246,7 +255,7 @@ class FakeMaterial:
         self.name = name
 
 
-class FakeBody:
+class FakeBody(Proxyable):
     objectType = "adsk::fusion::BRepBody"
 
     def __init__(
@@ -394,7 +403,7 @@ class FakeInfiniteLine:
         self.direction = direction
 
 
-class FakeConstructionPlane:
+class FakeConstructionPlane(Proxyable):
     objectType = "adsk::fusion::ConstructionPlane"
 
     def __init__(
@@ -407,7 +416,7 @@ class FakeConstructionPlane:
             setattr(self, key, value)
 
 
-class FakeConstructionAxis:
+class FakeConstructionAxis(Proxyable):
     objectType = "adsk::fusion::ConstructionAxis"
 
     def __init__(
@@ -420,7 +429,7 @@ class FakeConstructionAxis:
             setattr(self, key, value)
 
 
-class FakeConstructionPoint:
+class FakeConstructionPoint(Proxyable):
     objectType = "adsk::fusion::ConstructionPoint"
 
     def __init__(self, name: str, point: Any, token: str | None = None, **attrs: Any) -> None:
@@ -434,7 +443,7 @@ class FakeConstructionPoint:
 FakeProfiles = FakeProfileCollection
 
 
-class FakeSketch(SketchApiMixin):
+class FakeSketch(SketchApiMixin, Proxyable):
     """The one sketch fake: c03 identity/plane fields plus the c05 sketch API
     (``SketchApiMixin``, tests/fakes/fusion_sketch.py). ``profile_count`` creates that many
     empty placeholder profiles; the transform comes from ``reference_plane`` unless given."""
@@ -471,7 +480,7 @@ class FakeTimelineRef:
         self.index = index
 
 
-class FakeFeature:
+class FakeFeature(Proxyable):
     """Any ``*Feature``: ``objectType`` is ``adsk::fusion::<kind>``."""
 
     def __init__(
@@ -647,28 +656,87 @@ class FakeComponent:
 
 
 class FakeOccurrence:
+    """``Occurrence``. With an explicit ``name`` the name and path are fixed (c03 tests);
+    with ``name=None`` they follow Fusion: ``<component name>:<index>``, prefixed by the
+    path of ``assemblyContext`` (``Box:1+Hinge:1``), so renaming the component renames them.
+    ``nativeObject`` is set on the root-context copies of nested occurrences (c10 D9)."""
+
     objectType = "adsk::fusion::Occurrence"
 
     def __init__(
         self,
         component: FakeComponent,
-        name: str = "Part:1",
+        name: str | None = "Part:1",
         full_path_name: str | None = None,
-        transform: FakeMatrix | None = None,
+        transform: Any = None,
         is_grounded: bool = False,
         is_visible: bool = True,
         token: str | None = None,
+        *,
+        index: int = 1,
+        assembly_context: Any = None,
+        is_light_bulb_on: bool = True,
     ) -> None:
         self.component = component
-        self.name = name
-        self.fullPathName = full_path_name or name
+        self._name = name
+        self._full_path_name = full_path_name or name
+        self._index = index
+        self.assemblyContext = assembly_context
+        self.nativeObject: Any = None
         self.transform2 = transform or FakeMatrix()
         self.isGrounded = is_grounded
         self.isVisible = is_visible
+        self.isLightBulbOn = is_light_bulb_on
         self.entityToken = token or _token("occurrence-")
         self.childOccurrences = FakeCollection()
         self.bRepBodies = FakeCollection()
         self.boundingBox = FakeBoundingBox((0, 0, 0), (0, 0, 0))
+        self.deleted = False
+        self.activations = 0
+
+    @property
+    def name(self) -> str:
+        if self._name is not None:
+            return self._name
+        return f"{self.component.name}:{self._index}"
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self._name = value
+
+    @property
+    def fullPathName(self) -> str:
+        if self._full_path_name is not None:
+            return self._full_path_name
+        if self.assemblyContext is None:
+            return self.name
+        return f"{self.assemblyContext.fullPathName}+{self.name}"
+
+    def createForAssemblyContext(self, occurrence: Any) -> FakeOccurrence:
+        """This occurrence seen through ``occurrence`` (a nested path)."""
+        native = self.nativeObject or self
+        proxy = FakeOccurrence(
+            self.component,
+            None,
+            transform=self.transform2,
+            is_grounded=self.isGrounded,
+            is_visible=self.isVisible,
+            token=f"{native.entityToken}+{occurrence.entityToken}",
+            index=native._index,
+            assembly_context=occurrence,
+            is_light_bulb_on=self.isLightBulbOn,
+        )
+        proxy._name = native._name
+        proxy.nativeObject = native
+        return proxy
+
+    def activate(self) -> bool:
+        self.activations += 1
+        return True
+
+    def deleteMe(self) -> bool:
+        self.deleted = True
+        return True
 
 
 def add_occurrence(parent: Any, occurrence: FakeOccurrence, root: FakeComponent) -> FakeOccurrence:

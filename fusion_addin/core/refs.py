@@ -6,6 +6,11 @@ without a token get a typed name path: ``param:<name>``, ``component:<name>``,
 D15). Timeline groups (no token) go out as ``timeline:<name>``, which resolves to the
 ``TimelineObject`` of that name (c09 D1). ``resolve`` turns a ref back into the entity or
 raises ``ENTITY_NOT_FOUND``.
+
+Entities seen through an occurrence (proxies, ``assemblyContext`` set) go out as
+``<native ref>@<occurrence fullPathName>`` and resolve back to a proxy built with
+``createForAssemblyContext`` (c10 D1). Occurrences keep their own form: the path is their
+context already.
 """
 
 from __future__ import annotations
@@ -13,7 +18,13 @@ from __future__ import annotations
 from typing import Any
 
 from fusion_mcp.protocol.errors import BridgeError, ErrorCode
-from fusion_mcp.protocol.refs import format_origin_ref, is_origin_ref, parse_origin_ref
+from fusion_mcp.protocol.refs import (
+    format_origin_ref,
+    is_origin_ref,
+    parse_origin_ref,
+    split_context,
+    with_context,
+)
 
 PARAM_PREFIX = "param:"
 COMPONENT_PREFIX = "component:"
@@ -78,7 +89,66 @@ def origin_name(entity: Any) -> str | None:
     return None
 
 
+def _get(entity: Any, attr: str) -> Any:
+    try:
+        return getattr(entity, attr, None)
+    except Exception:
+        return None
+
+
+def assembly_context(entity: Any) -> Any:
+    """The occurrence a proxy is seen through; ``None`` for native entities."""
+    return _get(entity, "assemblyContext")
+
+
+def native_of(entity: Any) -> Any:
+    """``nativeObject`` of an assembly-context proxy, else the entity itself."""
+    native = _get(entity, "nativeObject")
+    return native if native is not None else entity
+
+
+def owner_component(entity: Any) -> Any:
+    """Component that owns ``entity``: ``parentComponent``, through the body for B-Rep
+    faces/edges/vertices and through the sketch for sketch entities; ``None`` if unknown."""
+    for path in (
+        ("parentComponent",),
+        ("body", "parentComponent"),
+        ("parentSketch", "parentComponent"),
+    ):
+        value = entity
+        for attr in path:
+            value = _get(value, attr)
+            if value is None:
+                break
+        if value is not None:
+            return value
+    return None
+
+
+def same_entity(a: Any, b: Any) -> bool:
+    """Fusion hands out a new wrapper per access: compare by identity, ``==`` or token."""
+    if a is b:
+        return True
+    if a is None or b is None:
+        return False
+    try:
+        if a == b:
+            return True
+    except Exception:
+        pass
+    token_a, token_b = _token(a), _token(b)
+    return token_a is not None and token_a == token_b
+
+
 def to_ref(entity: Any) -> str:
+    context = assembly_context(entity)
+    if context is not None and type_name(entity) != "Occurrence":
+        native = _get(entity, "nativeObject")
+        if native is not None and native is not entity:
+            try:
+                return with_context(to_ref(native), context.fullPathName)
+            except ValueError:
+                pass
     origin = origin_name(entity)
     if origin is not None:
         return format_origin_ref(origin)
@@ -114,12 +184,19 @@ def resolve(design: Any, ref: Any, component: Any = None) -> Any:
     """Return the entity for ``ref`` (a string or a ``{"ref": ...}`` dict).
 
     ``origin:<NAME>`` is an origin element of ``component`` (default: the root component);
-    an unknown name is ``INVALID_PARAMS``.
+    an unknown name is ``INVALID_PARAMS``. ``<inner>@<path>`` is the proxy of ``inner``
+    (resolved in the occurrence's component) in the context of occurrence ``path``.
     """
     if isinstance(ref, dict):
         ref = ref.get("ref")
     if not isinstance(ref, str) or not ref:
         raise BridgeError(ErrorCode.INVALID_PARAMS, "ref must be a non-empty string", {"ref": ref})
+    try:
+        inner, path = split_context(ref)
+    except ValueError as exc:
+        raise BridgeError(ErrorCode.INVALID_PARAMS, str(exc), {"ref": ref}) from exc
+    if path is not None:
+        return _resolve_in_context(design, ref, inner, path)
     if is_origin_ref(ref):
         name = parse_origin_ref(ref)
         owner = component if component is not None else design.rootComponent
@@ -133,6 +210,29 @@ def resolve(design: Any, ref: Any, component: Any = None) -> Any:
     if entity is None:
         raise _not_found(ref, "it was deleted or never existed")
     return entity
+
+
+def _resolve_in_context(design: Any, ref: str, inner: str, path: str) -> Any:
+    """``<inner>@<path>`` -> ``native.createForAssemblyContext(occurrence)`` (c10 D1)."""
+    occurrence = resolve(design, OCCURRENCE_PREFIX + path)
+    component = occurrence.component
+    native = native_of(resolve(design, inner, component))
+    owner = owner_component(native)
+    if owner is not None and not same_entity(owner, component):
+        raise BridgeError(
+            ErrorCode.INVALID_PARAMS,
+            f"entity is not in {component.name}: {ref!r} belongs to {owner.name}",
+            {"ref": ref, "component": component.name, "owner": owner.name},
+        )
+    try:
+        return native.createForAssemblyContext(occurrence)
+    except Exception as exc:
+        raise BridgeError(
+            ErrorCode.FUSION_API_ERROR,
+            f"cannot put {type_name(native)} into the context of {path!r}: "
+            + (str(exc) or type(exc).__name__),
+            {"ref": ref},
+        ) from exc
 
 
 def _parent_group(item: Any) -> Any:

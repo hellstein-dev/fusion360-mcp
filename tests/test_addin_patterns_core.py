@@ -84,7 +84,7 @@ def test_occurrence_input_owner_is_root_or_assembly_context() -> None:
     assert pattern.kind == "occurrence"
     assert pattern.component is s.root
     parent = FakeOccurrence(FakeComponent("asm"), "Asm:1")
-    s.occ.assemblyContext = parent  # type: ignore[attr-defined]
+    s.occ.assemblyContext = parent
     assert p.pattern_inputs(s.ctx(), ["occ"]).component is parent.component
 
 
