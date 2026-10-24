@@ -92,6 +92,53 @@ Errors come back as tool results with `isError = true` and the text
 `"<CODE>: <message>"` plus JSON details (for example a Fusion traceback). This lets the
 agent see what went wrong and fix it.
 
+## Sketches
+
+The `sketch_*` tools (`sketch_create`, `sketch_list`, `sketch_get`, `sketch_profiles`,
+`sketch_draw`, `sketch_constrain`, `sketch_dimension`, `sketch_dimension_set`,
+`sketch_set_construction`, `sketch_delete`, `sketch_transform`, `sketch_offset`,
+`sketch_trim`, `sketch_extend`, `sketch_fillet`, `sketch_mirror`, `sketch_pattern`,
+`sketch_project`) build fully constrained, parametric 2D sketches. A typical sketch takes
+`sketch_create` plus one `sketch_draw` with geometry, constraints and dimensions together.
+
+- **Coordinates are sketch space, mm.** Points are `[x, y]` on the sketch plane (numbers
+  only; the `units` parameter of `sketch_draw` can switch to cm/m/in/ft). Fusion picks the
+  sketch axes: `sketch_create` and `sketch_get` return `transform = {origin, x_axis,
+  y_axis, normal}` (model mm, unit vectors), and model = origin + x·x_axis + y·y_axis.
+  On `origin:XY` sketch x/y are model x/y, but on **`origin:XZ` the sketch Y axis is model
+  −Z**: a point drawn at y = 10 ends up at z = −10. Read `transform`, or give points in
+  model space as `{"model": [x, y, z]}` (projected onto the sketch plane; an off-plane
+  point adds a warning).
+- **Geometry is approximate, dimensions are exact.** Expressions are refused in
+  coordinates (`["w/2", 0]` fails with `INVALID_PARAMS`). Exact and parametric sizes come
+  from dimensions: a number is mm (degrees for angles), a string is a Fusion expression
+  (`"plate_w * 0.6"`). `parameter_name` names a dimension's parameter, so later dimensions
+  and `parameter_update` can use it.
+- **Local ids live for one call.** Inside a `sketch_draw` call an item's `id`, and sub-paths
+  such as `r.bottom`, `r.center`, `l1.end` or `slot.c0`, can be used by later items,
+  constraints and dimensions. `origin` is the sketch origin point. The result `refs` maps
+  every local path to a real entity ref. Use those refs in later calls, because the local
+  ids are gone after the call.
+- **Profile refs.** Fusion profiles have no persistent id, and their order changes whenever
+  the sketch changes. A profile is therefore addressed by its sketch and a point inside the
+  region: `profile:<sketch token>@<x>,<y>` (sketch mm). Mutating sketch tools and
+  `sketch_profiles` return each profile with `ref`, interior `point`, `area_mm2`,
+  `centroid`, `bbox` and its outer and inner loops. Pass the ref string to features as the
+  profile. It stays valid through moderate dimension changes. If the region has moved away
+  from the point, the feature fails with `ENTITY_NOT_FOUND` and the current profiles; call
+  `sketch_profiles(contains=[x, y])` to get a fresh ref.
+- **Atomicity.** Every mutating sketch tool is all or nothing. On failure, everything it
+  created in the sketch is deleted and the changed properties (expressions, construction,
+  fixed, positions) are restored. The error names `details.phase`, `index` and `id` of the
+  failing item. Fusion cannot undo trim, extend and sketch fillet inside a batch, so
+  **`sketch_trim`, `sketch_extend` and `sketch_fillet` take one curve or corner per call**.
+  They replace curves, so use the refs they return for the next step. The one exception is
+  `sketch_delete`: it validates all refs before deleting anything, but if Fusion itself
+  fails in the middle of the batch, the entities already deleted stay deleted
+  (`FUSION_API_ERROR` with `details.deleted`).
+- Changing a sketch that features already use can break later timeline features. Check
+  feature health afterwards (`inspect_tree`).
+
 ## Limitations
 
 - **Timeouts.** Every request has a timeout (`execute_python` takes `timeout_s`, default
