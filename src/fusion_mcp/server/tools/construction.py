@@ -29,6 +29,7 @@ PlaneMethod = Literal[
     "tangent_at_point",
     "along_path",
 ]
+AxisMethod = Literal["two_points", "edge", "cylinder", "perpendicular_at_point", "two_planes"]
 
 Ref = Annotated[str, Field(min_length=1)]
 PlaneRef = Annotated[
@@ -137,3 +138,58 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
             name=name,
         )
         return await _construct(bridge, "plane", params)
+
+    @mcp.tool(name="construction_axis")
+    async def construction_axis(
+        method: Annotated[AxisMethod, Field(description="How the axis is defined")],
+        points: Annotated[list[Ref] | None, Field(description="two_points: 2 point refs")] = None,
+        edge: Annotated[
+            str | None, Field(min_length=1, description="Straight edge, sketch line or axis ref")
+        ] = None,
+        face: Annotated[
+            str | None,
+            Field(min_length=1, description="cylinder: round face; perpendicular_at_point: face"),
+        ] = None,
+        point: PointRef = None,
+        plane: PlaneRef = None,
+        plane2: PlaneRef = None,
+        component: Component = None,
+        name: Name = None,
+    ) -> CallToolResult:
+        """Create a construction axis — for revolve, circular patterns, joints.
+
+        Give `method` and exactly its fields:
+
+        | method                 | fields                                         |
+        |------------------------|------------------------------------------------|
+        | two_points             | points (2 refs)                                |
+        | edge                   | edge (straight)                                |
+        | cylinder               | face (cylinder, cone or torus): its axis       |
+        | perpendicular_at_point | face, point (on that face): normal through it  |
+        | two_planes             | plane, plane2: their intersection line         |
+
+        Refs: `origin:XY|XZ|YZ|X|Y|Z|O` or refs from inspect_query (e.g. a hole face:
+        inspect_query(kind="face", surface_type="cylinder")). A wrong entity kind fails
+        with INVALID_PARAMS and `details {param, expected, got}`; a definition Fusion
+        cannot build (parallel planes, a point off the face) fails with FUSION_API_ERROR
+        and leaves the timeline unchanged.
+
+        Returns {"ref", "type": "ConstructionAxis", "name", "origin_mm", "direction",
+        "health", "warning"?}.
+
+        Examples:
+        - construction_axis(method="cylinder", face=<hole face ref>)
+        - construction_axis(method="two_planes", plane="origin:XZ", plane2="origin:YZ")
+        """
+        params = _given(
+            method=method,
+            points=points,
+            edge=edge,
+            face=face,
+            point=point,
+            plane=plane,
+            plane2=plane2,
+            component=component,
+            name=name,
+        )
+        return await _construct(bridge, "axis", params)
