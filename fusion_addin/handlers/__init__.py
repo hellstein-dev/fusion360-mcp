@@ -1,6 +1,8 @@
 """Handler groups: importing this package registers every ``<group>.<action>`` handler."""
 
 from . import (
+    body,
+    body_faces,
     construction,
     design,
     document,
@@ -18,6 +20,8 @@ from . import (
 )
 
 __all__ = [
+    "body",
+    "body_faces",
     "construction",
     "design",
     "document",
