@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+import threading
 from typing import Any
 
 from mcp.types import LATEST_PROTOCOL_VERSION
@@ -31,20 +32,36 @@ def test_initialize_and_list_tools_over_stdio() -> None:
         + rpc(None, "notifications/initialized")
         + rpc(2, "tools/list", {})
     )
-    proc = subprocess.run(
+    # stdin stays open until the last reply arrives: closing it right away lets the server
+    # shut down while tools/list is still in flight (the reply is then lost).
+    proc = subprocess.Popen(
         [sys.executable, "-m", "fusion_mcp"],
-        input=stdin,
-        capture_output=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=60,
-        check=False,
     )
-    replies = {
-        msg["id"]: msg
-        for msg in (json.loads(line) for line in proc.stdout.splitlines() if line.strip())
-        if "id" in msg
-    }
-    assert 1 in replies, proc.stderr
+    killer = threading.Timer(60, proc.kill)
+    killer.start()
+    replies: dict[int, Any] = {}
+    try:
+        assert proc.stdin is not None and proc.stdout is not None
+        proc.stdin.write(stdin)
+        proc.stdin.flush()
+        for line in proc.stdout:
+            if line.strip():
+                msg = json.loads(line)
+                if "id" in msg:
+                    replies[msg["id"]] = msg
+            if 2 in replies:
+                break
+        proc.stdin.close()
+        _, stderr = proc.communicate(timeout=60)
+    finally:
+        killer.cancel()
+        if proc.poll() is None:
+            proc.kill()
+    assert 1 in replies, stderr
     assert replies[1]["result"]["serverInfo"]["name"] == "fusion-mcp"
     tools = {tool["name"]: tool for tool in replies[2]["result"]["tools"]}
     assert {"fusion_status", "execute_python"} <= set(tools)

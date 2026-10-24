@@ -298,7 +298,7 @@ def _new_occurrence_of(owner: Any, component: Any) -> Any:
     return None
 
 
-def _create_component(comp: Compensation, owner: Any, first: Any) -> tuple[Any, Any | None]:
+def _create_component(owner: Any, first: Any) -> tuple[Any, Any | None]:
     """``first.createComponent()`` -> ``(occurrence, moved body | None)``; without the method
     (or an unusable result) ``(new empty occurrence, None)`` - the caller moves ``first``."""
     create = getattr(first, "createComponent", None)
@@ -334,7 +334,7 @@ def assembly_component_from_bodies(ctx: Any, params: dict[str, Any]) -> dict[str
     _check_unique_name(ctx, name)
     owner = _owner_component(bodies[0])
     with Compensation() as comp:
-        occurrence, first_moved = _create_component(comp, owner, bodies[0])
+        occurrence, first_moved = _create_component(owner, bodies[0])
         moved = [first_moved] if first_moved is not None else [_moved(bodies[0], occurrence)]
         moved.extend(_moved(body, occurrence) for body in bodies[1:])
         component = occurrence.component
