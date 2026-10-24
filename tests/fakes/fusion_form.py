@@ -180,6 +180,13 @@ class FakeTSplineBody:
             vertex.transform(matrix)
         return True
 
+    def deleteMe(self) -> bool:
+        form = self.parentFormFeature
+        if form is not None and self in form.tSplineBodies._items:
+            form.tSplineBodies._items.remove(self)
+        self.isValid = False
+        return True
+
     def getTSMDescription(self) -> str:
         return self.tsm if self.tsm is not None else f"FAKE-TSM vertices={self.vertices.count}"
 
