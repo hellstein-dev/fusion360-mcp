@@ -11,8 +11,8 @@ change, so a profile is addressed by a point inside its region (INV-7):
   their connected chains (``Sketch.findConnectedCurves``).
 
 Loop geometry comes from ``profileCurves[j].geometry.evaluator.getStrokes`` (sketch space);
-the ``areaProperties`` centroid is converted with ``Sketch.modelToSketchSpace`` (design Risks:
-Fusion reports it in model space).
+so is the ``areaProperties`` centroid of a profile ("relative to the sketch origin", checked on
+the live Fusion in c15 2.4 - c05 design Risks assumed model space).
 """
 
 from __future__ import annotations
@@ -162,10 +162,12 @@ def profile_shapes(sketch: Any) -> list[ProfileShape]:
 # --- summaries ---------------------------------------------------------------------------
 
 
-def _centroid_xy(sketch: Any, centroid: Any) -> XY:
-    """Model-space centroid of ``areaProperties`` -> sketch-space mm."""
-    local = sketch.modelToSketchSpace(centroid)
-    return (_mm(local.x), _mm(local.y))
+def _centroid_xy(centroid: Any) -> XY:
+    """Centroid of a profile's ``areaProperties`` (already sketch space, cm) -> sketch mm.
+
+    Not ``modelToSketchSpace``: on a sketch whose axes differ from model axes (``origin:XZ``)
+    that conversion moved the centroid off the profile (c15 2.4)."""
+    return (_mm(centroid.x), _mm(centroid.y))
 
 
 def _bbox(polyline: Sequence[XY]) -> dict[str, list[float]]:
@@ -178,7 +180,7 @@ def _summary(shape: ProfileShape, name: str) -> dict[str, Any]:
     sketch, profile = shape.sketch, shape.profile
     accuracy = adsk.fusion.CalculationAccuracy.MediumCalculationAccuracy
     props = profile.areaProperties(accuracy)
-    centroid = _centroid_xy(sketch, props.centroid)
+    centroid = _centroid_xy(props.centroid)
     outer = shape.outer.polyline if shape.outer else []
     inners = [loop.polyline for loop in shape.inners if len(loop.polyline) >= 3]
     try:

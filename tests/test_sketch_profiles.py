@@ -109,10 +109,17 @@ def test_concave_profile_point_is_inside_region() -> None:
     assert profile.accuracy_calls == [adsk.fusion.CalculationAccuracy.MediumCalculationAccuracy]
 
 
-def test_centroid_is_converted_to_sketch_space_on_xz() -> None:
+def test_centroid_is_taken_in_sketch_space_on_xz() -> None:
+    """The live ``areaProperties().centroid`` of a profile is already sketch space (c15 2.4):
+    converting it with ``modelToSketchSpace`` on ``origin:XZ`` gave ``[20, 0]``, not the
+    centre of the region."""
     sketch = make_sketch(plane="XZ")
     lines = polygon_curves(sketch, [(1, 1), (3, 1), (3, 2), (1, 2)])
-    add_profile(sketch, lines, centroid_space="model")
+    profile = add_profile(sketch, lines)
+    raw = profile.areaProperties().centroid
+    assert (raw.x, raw.y) == pytest.approx((2.0, 1.5))
+    moved = sketch.modelToSketchSpace(raw)
+    assert (moved.x, moved.y) != pytest.approx((2.0, 1.5))  # the old conversion was wrong here
     (summary,) = pr.summarize_all(sketch)
     assert summary["centroid"] == pytest.approx([20.0, 15.0], abs=1e-6)
     assert summary["point"] == [20.0, 15.0]

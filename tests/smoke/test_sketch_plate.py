@@ -143,8 +143,12 @@ def test_fully_constrained_plate_and_parameter_change(document: dict[str, Any]) 
     drawn = plate_draw(sketch)
     assert drawn["status"]["fully_constrained"] is True, drawn["status"]
     assert drawn["status"]["under_constrained_count"] == 0
-    for path in ("r", "r.bottom", "r.left", "r.center", "h1", "h1.center", "h4.center"):
+    # A rectangle is four lines, not one entity: its refs are the sides and the centre point
+    # (spec sketch-geometry "Center rectangle exposes center point"), there is no bare "r".
+    for path in ("r.bottom", "r.right", "r.top", "r.left", "r.center", "h1", "h1.center"):
         assert path in drawn["refs"], path
+    assert "h4.center" in drawn["refs"]
+    assert "r" not in drawn["refs"]
     assert len(drawn["constraints"]) == 7
     plate_w = drawn["dimensions"][0]
     assert plate_w["parameter"] == "plate_w"

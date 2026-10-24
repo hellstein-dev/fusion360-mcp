@@ -565,18 +565,18 @@ def test_explicit_profile_with_hole() -> None:
     hole_area = math.pi * 0.25
     assert props.area == pytest.approx(8 - hole_area, rel=1e-3)
     cx = (8 * 2 - hole_area * 1) / (8 - hole_area)
-    # Centroid in model space: XZ sketch (x, y) -> model (x, 0, -y).
+    # Centroid in sketch space even on an XZ sketch, as on the live Fusion (c15 2.4).
     assert (props.centroid.x, props.centroid.y, props.centroid.z) == (
         pytest.approx(cx, rel=1e-3),
+        pytest.approx(1.0),
         pytest.approx(0.0),
-        pytest.approx(-1.0),
     )
     assert props.perimeter == pytest.approx(12 + math.pi)
     assert profile.accuracy_calls == [adsk.fusion.CalculationAccuracy.HighCalculationAccuracy]
     box = profile.boundingBox
     assert (xyz(box.minPoint), xyz(box.maxPoint)) == ((0, 0, 0), (4.0, 2.0, 0))
-    sketch_space = add_profile(sketch, outer, centroid_space="sketch")
-    assert xyz(sketch_space.areaProperties().centroid) == (2.0, 1.0, 0.0)
+    solid = add_profile(sketch, outer)
+    assert xyz(solid.areaProperties().centroid) == (2.0, 1.0, 0.0)
 
 
 def test_auto_profiles_l_shape_nested_circle_and_invalidation() -> None:

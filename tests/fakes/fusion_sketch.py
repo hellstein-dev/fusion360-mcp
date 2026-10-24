@@ -1767,9 +1767,8 @@ class FakeProfileLoop:
 
 class FakeProfile:
     """``Profile``: one outer loop and inner loops of sketch curves. ``areaProperties``
-    computes area/centroid from the loops' strokes; the centroid is in model space
-    (``centroid_space="model"``, through ``sketchToModelSpace``) or sketch space
-    (``"sketch"``), see design Risks. ``boundingBox`` is sketch space."""
+    computes area/centroid from the loops' strokes; like the live Fusion (c15 2.4) the centroid
+    is in sketch space, relative to the sketch origin. ``boundingBox`` is sketch space."""
 
     objectType = "adsk::fusion::Profile"
 
@@ -1778,11 +1777,9 @@ class FakeProfile:
         sketch: Any,
         outer: Sequence[Any],
         inners: Iterable[Sequence[Any]] = (),
-        centroid_space: str = "model",
     ) -> None:
         self._sketch = sketch
         self._valid = True
-        self.centroid_space = centroid_space
         loops = [FakeProfileLoop(self, outer, True)] if outer else []
         loops += [FakeProfileLoop(self, inner, False) for inner in inners]
         self.profileLoops = FakeCollection(loops)
@@ -1820,8 +1817,6 @@ class FakeProfile:
         if area > 1e-15:
             cx, cy = mx / area, my / area
         centroid = P(cx, cy, 0.0)
-        if self.centroid_space == "model":
-            centroid = self._sketch.sketchToModelSpace(centroid)
         perimeter = sum(c.length for loop in self.profileLoops for c in loop._curves)
         return FakeAreaProperties(max(area, 0.0), centroid, perimeter)
 
@@ -3127,11 +3122,9 @@ def circle_curve(sketch: Any, center: Any, radius: float) -> Any:
     return sketch._circle(sketch._new_point(_v(center)), radius)
 
 
-def add_profile(
-    sketch: Any, outer: Sequence[Any], *inners: Sequence[Any], centroid_space: str = "model"
-) -> FakeProfile:
+def add_profile(sketch: Any, outer: Sequence[Any], *inners: Sequence[Any]) -> FakeProfile:
     """Append an explicit profile (outer loop + inner loops, each a list of sketch curves)."""
-    profile = FakeProfile(sketch, outer, inners, centroid_space)
+    profile = FakeProfile(sketch, outer, inners)
     sketch._explicit_profiles.append(profile)
     return profile
 
