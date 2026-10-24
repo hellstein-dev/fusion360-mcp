@@ -215,6 +215,7 @@ class FakeFace(Proxyable):
         self.evaluator = FakeEvaluator(normal)
         self.entityToken = token or _token("face-")
         self.body = body
+        self.appearance: Any = None
         self.edges = FakeCollection()
         self.vertices = FakeCollection()
         self.boundingBox = bounding_box or bbox_of([centroid])
@@ -277,7 +278,8 @@ class FakeBody(Proxyable):
         self.area = area
         self.isSolid = is_solid
         self.isVisible = is_visible
-        self.material = FakeMaterial(material) if material else None
+        self.material: Any = FakeMaterial(material) if material else None
+        self.appearance: Any = None
         self.parentComponent = component
         self.faces = FakeCollection()
         self.edges = FakeCollection()
@@ -621,6 +623,7 @@ class FakeComponent:
     def __init__(self, name: str = "root", token: str | None = None) -> None:
         self.name = name
         self.entityToken = token or _token(f"component-{name}-")
+        self.material: Any = None
         self.bRepBodies = FakeCollection()
         self.sketches = FakeSketches(self)
         self.constructionPlanes = FakeCollection()
@@ -688,6 +691,7 @@ class FakeOccurrence:
         self.isVisible = is_visible
         self.isLightBulbOn = is_light_bulb_on
         self.entityToken = token or _token("occurrence-")
+        self.appearance: Any = None
         self.childOccurrences = FakeCollection()
         self.bRepBodies = FakeCollection()
         self.boundingBox = FakeBoundingBox((0, 0, 0), (0, 0, 0))

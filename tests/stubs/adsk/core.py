@@ -425,6 +425,23 @@ class ObjectCollection:
         return len(self._items)
 
 
+class Color:
+    """``adsk.core.Color``: RGBA channels 0..255 (``opacity`` is the alpha)."""
+
+    def __init__(self, red: int, green: int, blue: int, opacity: int = 255) -> None:
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+
+    @staticmethod
+    def create(red: int, green: int, blue: int, opacity: int) -> "Color":
+        return Color(red, green, blue, opacity)
+
+    def getColor(self) -> tuple[bool, int, int, int, int]:
+        return True, self.red, self.green, self.blue, self.opacity
+
+
 # Enum values match Fusion's adsk.core.
 class DocumentTypes:
     FusionDesignDocumentType = 0

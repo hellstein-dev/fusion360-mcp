@@ -1,6 +1,7 @@
 """Handler groups: importing this package registers every ``<group>.<action>`` handler."""
 
 from . import (
+    appearance,
     assembly,
     body,
     body_faces,
@@ -11,6 +12,7 @@ from . import (
     feature_modify,
     feature_sketch,
     inspect,
+    material,
     measure,
     parameter,
     pattern,
@@ -23,6 +25,7 @@ from . import (
 )
 
 __all__ = [
+    "appearance",
     "assembly",
     "body",
     "body_faces",
@@ -33,6 +36,7 @@ __all__ = [
     "feature_modify",
     "feature_sketch",
     "inspect",
+    "material",
     "measure",
     "parameter",
     "pattern",
