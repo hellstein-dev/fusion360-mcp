@@ -178,7 +178,11 @@ feature per call:
   instead of reusing old ones.
 - **Operations.** Extrude, revolve, sweep and loft take `operation` = `new_body` (default),
   `join`, `cut`, `intersect` or `new_component`. `participant_bodies` limits which bodies
-  join/cut/intersect act on. Holes always cut, and ribs and webs always join.
+  join/cut/intersect act on. Holes always cut, and ribs and webs always join: to
+  `target_body`, by default the one solid body their curves touch (none or several ->
+  `INVALID_PARAMS` with `details.candidates`). A rib grows on one side of its curve; if
+  Fusion reports a warning, try `flip=true`. `thickness_location="side2"` is not available
+  in the current Fusion API.
 - **Result.** Every feature tool returns `{"feature": {ref, type, name}, "health": {"state":
   ok|warning|error|unknown, "message"}, "created_bodies", "modified_bodies",
   "removed_bodies"}`, plus `component` for `new_component`, `holes` (the count) and

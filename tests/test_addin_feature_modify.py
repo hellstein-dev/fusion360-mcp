@@ -787,10 +787,9 @@ def test_offset_face_outward() -> None:
     result = s.run(h.feature_offset_faces, {"faces": ["top"], "distance": 2})
     offsets = s.features.offsetFacesFeatures
     inp = offsets.last_input
-    faces, distance, chain = inp.create_args
+    faces, distance = inp.create_args  # live createInput(faces, distance): no chain (c15 3.2)
     assert faces == [s.top]
     assert _real(distance) == pytest.approx(0.2)
-    assert chain is True
     assert offsets.added == [inp]
     assert result["feature"]["type"] == "OffsetFacesFeature"
     assert _names(result["modified_bodies"]) == ["Box"]
@@ -800,13 +799,31 @@ def test_offset_faces_inward_without_chain_and_expression() -> None:
     s = Setup()
     params = {"faces": ["top", "px"], "distance": -0.1, "chain": False, "units": "in"}
     s.run(h.feature_offset_faces, params)
-    faces, distance, chain = s.features.offsetFacesFeatures.last_input.create_args
+    faces, distance = s.features.offsetFacesFeatures.last_input.create_args
     assert faces == [s.top, s.px]
     assert _real(distance) == pytest.approx(-0.254)
-    assert chain is False
     s.run(h.feature_offset_faces, {"faces": ["top"], "distance": "-pull"})
     distance = s.features.offsetFacesFeatures.last_input.create_args[1]
     assert distance.kind == "string" and distance.value == "-pull"
+
+
+def test_offset_faces_chain_walks_tangent_faces() -> None:
+    """The live input has no chain option (c15 3.2): ``chain`` adds the faces reached through
+    ``tangentiallyConnectedFaces`` (direct neighbours only), walked to the whole chain."""
+    s = Setup()
+    s.top.tangentiallyConnectedFaces = [s.px]
+    s.px.tangentiallyConnectedFaces = [s.top, s.py]
+    s.py.tangentiallyConnectedFaces = [s.px]
+    s.run(h.feature_offset_faces, {"faces": ["top"], "distance": 1})
+    assert s.features.offsetFacesFeatures.last_input.create_args[0] == [s.top, s.px, s.py]
+    s.run(h.feature_offset_faces, {"faces": ["top"], "distance": 1, "chain": False})
+    assert s.features.offsetFacesFeatures.last_input.create_args[0] == [s.top]
+
+
+def test_offset_faces_old_three_argument_call_is_refused() -> None:
+    offsets = Setup().features.offsetFacesFeatures
+    with pytest.raises(TypeError, match="takes 2 positional arguments"):
+        offsets.createInput([], None, True)
 
 
 @pytest.mark.parametrize(

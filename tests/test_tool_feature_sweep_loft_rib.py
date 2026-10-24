@@ -338,6 +338,7 @@ def test_rib_all_fields_are_sent(name: str, method: str) -> None:
             "thickness_location": "side1",
             "depth": {"type": "distance", "distance": 15},
             "flip": True,
+            "target_body": "body-1",
             "units": "cm",
         },
         bridge,
@@ -349,6 +350,7 @@ def test_rib_all_fields_are_sent(name: str, method: str) -> None:
         "thickness_location": "side1",
         "depth": {"type": "distance", "distance": 15.0},
         "flip": True,
+        "target_body": "body-1",
         "units": "cm",
     }
     call(name, {"curves": ["l1"], "thickness": 1, "depth": {"type": "to_next"}}, bridge)

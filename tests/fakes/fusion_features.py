@@ -102,6 +102,36 @@ FEATURE_COLLECTIONS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     "replaceFaceFeatures": ("ReplaceFaceFeature", "ReplaceFace", ("createInput",)),
     "removeFeatures": ("RemoveFeature", "Remove", ()),
 }
+# Creation methods checked against the live Fusion API (c15): positional parameters; a call
+# with another count raises the ``TypeError`` Python gives.
+LIVE_SIGNATURES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("RibFeature", "createInput"): ("curves", "thickness", "targetBody"),
+    ("WebFeature", "createInput"): ("curves", "thickness", "targetBody"),
+    ("OffsetFacesFeature", "createInput"): ("faces", "distance"),
+}
+_RIB_WEB_MEMBERS = {
+    "creationOccurrence",
+    "curves",
+    "depth",
+    "draftAngle",
+    "extentType",
+    "filletRadius",
+    "isFlipped",
+    "isSymmetric",
+    "isThicknessFromTop",
+    "setDistanceExtent",
+    "setToNextExtent",
+    "targetBaseFeature",
+    "targetBody",
+    "thickness",
+}
+# Members of inputs checked against the live API (c15): any other name is an AttributeError.
+LIVE_INPUT_MEMBERS: dict[str, frozenset[str]] = {
+    "RibFeature": frozenset(_RIB_WEB_MEMBERS | {"draftPullDirection", "isDraftDirectionFlipped"}),
+    "WebFeature": frozenset(_RIB_WEB_MEMBERS | {"isExtended"}),
+    "OffsetFacesFeature": frozenset({"distance", "faces", "targetBaseFeature"}),
+}
+
 # Collections whose ``add`` takes the entities themselves, not a feature input.
 DIRECT_COLLECTIONS = frozenset({"copyPasteBodies", "deleteFaceFeatures", "removeFeatures"})
 
@@ -114,6 +144,7 @@ _OWN = frozenset(
         "attrs",
         "returns",
         "missing",
+        "members",
     }
 )
 
@@ -137,16 +168,23 @@ class FakeFeatureInput:
         self.attrs: dict[str, Any] = {}
         self.returns: dict[str, Any] = {}
         self.missing: set[str] = set()
+        # The live input's members (``LIVE_INPUT_MEMBERS``); ``None`` accepts any name.
+        self.members: frozenset[str] | None = None
 
     @property
     def objectType(self) -> str:
         kind = self.collection.kind if self.collection is not None else "Feature"
         return f"adsk::fusion::{kind}Input"
 
+    def _check_member(self, name: str) -> None:
+        if self.members is not None and name not in self.members:
+            raise AttributeError(f"'{self.objectType}' object has no attribute {name!r}")
+
     def __setattr__(self, name: str, value: Any) -> None:
         if name in _OWN:
             object.__setattr__(self, name, value)
             return
+        self._check_member(name)
         self.attrs[name] = value
         self.log.append(("set", name, value))
 
@@ -156,6 +194,7 @@ class FakeFeatureInput:
             raise AttributeError(name)
         if name in self.missing:
             raise AttributeError(f"{type(self).__name__} has no attribute {name!r}")
+        self._check_member(name)
         if name in self.attrs:
             return self.attrs[name]
         return _Method(self, name)
@@ -240,9 +279,16 @@ class FakeFeatureCollection(FakeCollection):
             raise AttributeError(f"{type(self).__name__} has no attribute {name!r}")
 
         def create(*args: Any) -> FakeFeatureInput:
+            signature = LIVE_SIGNATURES.get((self.kind, name))
+            if signature is not None and len(args) != len(signature):
+                raise TypeError(
+                    f"{self.kind}s.{name}() takes {len(signature)} positional arguments "
+                    f"({', '.join(signature)}) but {len(args)} were given"
+                )
             if self.create_error is not None:
                 raise RuntimeError(self.create_error)
             inp = FakeFeatureInput(self, name, args)
+            inp.members = LIVE_INPUT_MEMBERS.get(self.kind)
             _prepare_input(self, name, inp)
             self.inputs.append(inp)
             return inp

@@ -43,6 +43,7 @@ from fusion_mcp.protocol.surfaces import SURFACE_OPERATIONS
 
 from ..core.entity_kinds import describe_kind, is_face, is_planar, require_kind
 from ..core.features import (
+    BODY,
     EXTENT_ENTITY_TYPES,
     PATH_TYPES,
     BodySnapshot,
@@ -53,7 +54,6 @@ from ..core.features import (
     feature_result,
     length_value,
     make_path,
-    object_collection,
     operation_enum,
     participant_bodies,
     resolve_many,
@@ -792,8 +792,46 @@ def _rib_depth(ctx: Any, params: dict[str, Any]) -> Any:
     return length_value(ctx, depth["distance"], param="depth.distance")
 
 
+# Curve-to-body distance (cm) up to which a sketch curve counts as touching a body.
+TOUCH_TOL_CM = 1e-4
+
+
+def _body_brief(ctx: Any, body: Any) -> dict[str, Any]:
+    return {"ref": ctx.refs.to_ref(body), "name": getattr(body, "name", None)}
+
+
+def _touches(ctx: Any, curve: Any, body: Any) -> bool:
+    try:
+        distance = ctx.app.measureManager.measureMinimumDistance(curve, body).value
+    except Exception:
+        return False
+    return float(distance) <= TOUCH_TOL_CM
+
+
+def _rib_target(ctx: Any, params: dict[str, Any], curves: list[Any], component: Any) -> Any:
+    """``targetBody`` of a rib / web (c15 3.1): the ``target_body`` ref, else the one solid body
+    of the curves' component that a curve touches; none or several -> ``INVALID_PARAMS`` with
+    the candidate bodies in ``details.candidates``."""
+    ref = params.get("target_body")
+    if ref is not None:
+        return resolve_one(ctx, ref, (BODY,), "target_body")
+    solids = [b for b in component.bRepBodies if getattr(b, "isSolid", True)]
+    touching = [b for b in solids if any(_touches(ctx, curve, b) for curve in curves)]
+    if len(touching) == 1:
+        return touching[0]
+    candidates = touching or solids
+    reason = "ambiguous_target_body" if touching else "no_target_body"
+    what = "several bodies" if touching else "no solid body"
+    raise _invalid(
+        f"the curves touch {what}: give 'target_body'",
+        param="target_body",
+        reason=reason,
+        candidates=[_body_brief(ctx, b) for b in candidates],
+    )
+
+
 def _rib_like(ctx: Any, params: dict[str, Any], feature_type: str) -> dict[str, Any]:
-    """Rib / web from open sketch curves (D14), always joined to the body they touch."""
+    """Rib / web from open sketch curves (D14) on ``target_body`` (c15 3.1), joined to it."""
     curves = _open_curves(ctx, params)
     if params.get("thickness") is None:
         raise _invalid("missing required parameter 'thickness'", param="thickness")
@@ -810,18 +848,22 @@ def _rib_like(ctx: Any, params: dict[str, Any], feature_type: str) -> dict[str, 
     attr = _RIB_COLLECTIONS[feature_type]
     if not hasattr(features, attr):
         raise _not_available(feature_type, f"{_RIB_NAMES[feature_type]} features are")
+    target = _rib_target(ctx, params, curves, component)
 
     before = _snapshot(component, None)
     collection = getattr(features, attr)
-    inp = collection.createInput(object_collection(curves), thickness)
+    # Live API (c15 3.1): createInput(curves: list, thickness, targetBody); depth through
+    # setToNextExtent / setDistanceExtent, direction through isFlipped.
+    inp = collection.createInput(list(curves), thickness, target)
     _set(feature_type, inp, "isSymmetric", location == "symmetric")
-    if location != "symmetric":
-        _set(feature_type, inp, "isThicknessFlipped", location == "side2")
+    if location == "side2":
+        # The input has no thickness-side flip in the live API: side2 fails "not available".
+        _set(feature_type, inp, "isThicknessFlipped", True)
     if distance is None:
-        _call_opt(feature_type, inp, "setDepthToNext")
+        _call_opt(feature_type, inp, "setToNextExtent")
     else:
-        _call_opt(feature_type, inp, "setDepthDistance", distance)
-    _set(feature_type, inp, "isDirectionFlipped", flip)
+        _call_opt(feature_type, inp, "setDistanceExtent", distance)
+    _set(feature_type, inp, "isFlipped", flip)
     feature = collection.add(inp)
     return _finish(ctx, feature, before, "join")
 

@@ -361,8 +361,14 @@ def test_rib_in_an_l_bracket(document: dict[str, Any]) -> None:
             }
         ],
     )
+    # The rib grows along (curve tangent x sketch normal); for this line that points away from
+    # the corner (Fusion: warning, the rib runs to a far face), so it is flipped into the
+    # corner: a healthy gusset (checked on the live Fusion, c15 3.1).
     out = healthy(
-        thin_wall_or_skip("feature_rib", {"curves": [token(line["refs"]["l1"])], "thickness": 3})
+        thin_wall_or_skip(
+            "feature_rib",
+            {"curves": [token(line["refs"]["l1"])], "thickness": 3, "flip": True},
+        )
     )
     assert len(out["modified_bodies"]) == 1
     assert volume(one_body()) > before

@@ -519,6 +519,27 @@ def feature_draft(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     return _finish(ctx, feature, before, None, touched)
 
 
+def _same_face(a: Any, b: Any) -> bool:
+    if a is b:
+        return True
+    token = getattr(a, "entityToken", None)
+    return token is not None and token == getattr(b, "entityToken", None)
+
+
+def tangent_chain(faces: list[Any]) -> list[Any]:
+    """``faces`` plus every face reached through ``BRepFace.tangentiallyConnectedFaces`` (only
+    the direct smooth neighbours in the API, so it is walked to the whole chain), in order."""
+    out: list[Any] = []
+    pending = list(faces)
+    while pending:
+        face = pending.pop(0)
+        if any(_same_face(face, seen) for seen in out):
+            continue
+        out.append(face)
+        pending.extend(getattr(face, "tangentiallyConnectedFaces", None) or ())
+    return out
+
+
 @handler("feature.offset_faces", mutating=True)
 def feature_offset_faces(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     """Press-pull faces by a signed distance (positive = outward) (D19); result per D8 with
@@ -534,8 +555,14 @@ def feature_offset_faces(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     component = target_component(faces[0])
     touched = _bodies_of(faces)
 
+    if chain:
+        faces = tangent_chain(faces)
+        touched = _bodies_of(faces)
+
     before = _snapshot(component, None)
     offsets = component.features.offsetFacesFeatures
-    inp = offsets.createInput(list(faces), distance, chain)
+    # Live API (c15 3.2): createInput(faces: list, distance) - no chain argument; the chain is
+    # expanded above.
+    inp = offsets.createInput(list(faces), distance)
     feature = offsets.add(inp)
     return _finish(ctx, feature, before, None, touched)

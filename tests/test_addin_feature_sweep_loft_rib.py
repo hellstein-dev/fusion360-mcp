@@ -606,12 +606,33 @@ def test_loft_error_feature_is_rolled_back() -> None:
 # --- 8.1 / 8.2 rib and web -----------------------------------------------------------------
 
 
-class RibSetup:
-    """A box body and an open sketch line on XZ inside it (``line``)."""
+class TouchMeasure:
+    """``app.measureManager``: a curve is 0 cm from the bodies named in ``touching``, else
+    5 cm (``target_body`` default, c15 3.1)."""
 
-    def __init__(self, omit: tuple[str, ...] = ()) -> None:
+    def __init__(self, touching: tuple[str, ...]) -> None:
+        self.touching = touching
+        self.calls: list[tuple[Any, Any]] = []
+
+    def measureMinimumDistance(self, a: Any, b: Any) -> Any:
+        self.calls.append((a, b))
+        return type("Result", (), {"value": 0.0 if b.name in self.touching else 5.0})()
+
+
+class RibSetup:
+    """A box body and an open sketch line on XZ inside it (``line``); with ``second`` also a
+    body ``Other``. The curves touch the bodies named in ``touching``."""
+
+    def __init__(
+        self,
+        omit: tuple[str, ...] = (),
+        second: bool = False,
+        touching: tuple[str, ...] = ("Box",),
+    ) -> None:
         self.box = fake_box_body(4, 2, 3, name="Box")
-        self.design = fake_feature_design(self.box)
+        self.other = fake_box_body(1, 1, 1, name="Other")
+        self.measure = TouchMeasure(touching)
+        self.design = fake_feature_design(*((self.box, self.other) if second else (self.box,)))
         self.root = self.design.rootComponent
         if omit:
             install_features(self.root, self.design, omit=omit)
@@ -621,7 +642,9 @@ class RibSetup:
         self.aliases = {c.entityToken: c for c in (*self.lines, self.circle)}
 
     def ctx(self, params: dict[str, Any]) -> Context:
-        return make_ctx(self.design, params, self.aliases)
+        ctx = make_ctx(self.design, params, self.aliases)
+        ctx.app.measureManager = self.measure  # type: ignore[union-attr]
+        return ctx
 
     def run(self, fn: Any, params: dict[str, Any]) -> Any:
         return fn(self.ctx(params), params)
@@ -645,14 +668,14 @@ def test_rib_to_next_modifies_the_body(fn: Any, attr: str, kind: str, label: str
     collection.will_modify(s.box)
     result = s.run(fn, {"curves": [s.lines[0].entityToken], "thickness": 3})
     inp = collection.last_input
-    curves, thickness = inp.create_args
-    assert isinstance(curves, adsk.core.ObjectCollection)
-    assert list(curves) == [s.lines[0]]
+    # Live API (c15 3.1): createInput(curves: list, thickness, targetBody).
+    curves, thickness, target = inp.create_args
+    assert curves == [s.lines[0]]
     assert _real(thickness) == pytest.approx(0.3)
+    assert target is s.box  # the one body the curve touches
     assert inp.sets["isSymmetric"] is True
-    assert "isThicknessFlipped" not in inp.sets
-    assert inp.call("setDepthToNext") == ()
-    assert inp.sets["isDirectionFlipped"] is False
+    assert inp.call("setToNextExtent") == ()
+    assert inp.sets["isFlipped"] is False
     assert result["feature"]["type"] == kind
     assert [b["name"] for b in result["modified_bodies"]] == ["Box"]
     assert result["created_bodies"] == [] and result["removed_bodies"] == []
@@ -667,23 +690,84 @@ def test_rib_side_distance_flip_units(fn: Any, attr: str, kind: str, label: str)
         {
             "curves": [c.entityToken for c in s.lines],
             "thickness": "wall",
-            "thickness_location": "side2",
+            "thickness_location": "side1",
             "depth": {"type": "distance", "distance": 1},
             "flip": True,
             "units": "in",
         },
     )
     inp = collection.last_input
-    curves, thickness = inp.create_args
-    assert list(curves) == s.lines
+    curves, thickness, _target = inp.create_args
+    assert curves == s.lines
     assert (thickness.kind, thickness.value) == ("string", "wall")
     assert inp.sets["isSymmetric"] is False
-    assert inp.sets["isThicknessFlipped"] is True
-    (distance,) = inp.call("setDepthDistance")
+    (distance,) = inp.call("setDistanceExtent")
     assert _real(distance) == pytest.approx(2.54)
-    assert inp.sets["isDirectionFlipped"] is True
-    s.run(fn, {"curves": [s.lines[0].entityToken], "thickness": 1, "thickness_location": "side1"})
-    assert collection.last_input.sets["isThicknessFlipped"] is False
+    assert inp.sets["isFlipped"] is True
+
+
+@pytest.mark.parametrize(("fn", "attr", "kind", "label"), RIB_CASES)
+def test_rib_side2_is_not_available(fn: Any, attr: str, kind: str, label: str) -> None:
+    """The live input has no thickness-side flip (c15 3.1): side2 fails before ``add``."""
+    s = RibSetup()
+    collection = getattr(s.root.features, attr)
+    error = s.error(
+        fn, {"curves": [s.lines[0].entityToken], "thickness": 1, "thickness_location": "side2"}
+    )
+    assert error.code is ErrorCode.FUSION_API_ERROR
+    assert "isThicknessFlipped" in error.message and "not available" in error.message
+    assert collection.added == []
+
+
+@pytest.mark.parametrize(("fn", "attr", "kind", "label"), RIB_CASES)
+def test_rib_explicit_target_body(fn: Any, attr: str, kind: str, label: str) -> None:
+    s = RibSetup(second=True)
+    collection = getattr(s.root.features, attr)
+    s.run(
+        fn,
+        {"curves": [s.lines[0].entityToken], "thickness": 3, "target_body": s.other.entityToken},
+    )
+    assert collection.last_input.create_args[2] is s.other
+    error = s.error(
+        fn, {"curves": [s.lines[0].entityToken], "thickness": 3, "target_body": "origin:XY"}
+    )
+    assert error.code is ErrorCode.INVALID_PARAMS and error.details["param"] == "target_body"
+
+
+@pytest.mark.parametrize(("fn", "attr", "kind", "label"), RIB_CASES)
+@pytest.mark.parametrize(
+    ("touching", "reason", "candidates"),
+    [
+        (("Box", "Other"), "ambiguous_target_body", ["Box", "Other"]),
+        ((), "no_target_body", ["Box", "Other"]),
+    ],
+)
+def test_rib_target_body_must_be_unique(
+    fn: Any,
+    attr: str,
+    kind: str,
+    label: str,
+    touching: tuple[str, ...],
+    reason: str,
+    candidates: list[str],
+) -> None:
+    s = RibSetup(second=True, touching=touching)
+    error = s.error(fn, {"curves": [s.lines[0].entityToken], "thickness": 3})
+    assert error.code is ErrorCode.INVALID_PARAMS
+    assert error.details["param"] == "target_body"
+    assert error.details["reason"] == reason
+    assert [c["name"] for c in error.details["candidates"]] == candidates
+    assert getattr(s.root.features, attr).inputs == []
+
+
+@pytest.mark.parametrize(("fn", "attr", "kind", "label"), RIB_CASES)
+def test_rib_old_two_argument_call_is_refused(fn: Any, attr: str, kind: str, label: str) -> None:
+    collection = getattr(RibSetup().root.features, attr)
+    with pytest.raises(TypeError, match="takes 3 positional arguments"):
+        collection.createInput([], None)
+    inp = collection.createInput([], None, None)
+    for retired in ("setDepthToNext", "setDepthDistance", "isDirectionFlipped"):
+        assert not hasattr(inp, retired)
 
 
 @pytest.mark.parametrize(("fn", "attr", "kind", "label"), RIB_CASES)
@@ -707,13 +791,13 @@ def test_rib_missing_input_setter_is_not_available(
 
     def create(*args: Any) -> Any:
         inp = original(*args)
-        inp.missing.add("setDepthToNext")
+        inp.missing.add("setToNextExtent")
         return inp
 
     collection.createInput = create
     error = s.error(fn, {"curves": [s.lines[0].entityToken], "thickness": 3})
     assert error.code is ErrorCode.FUSION_API_ERROR
-    assert "setDepthToNext" in error.message and "not available" in error.message
+    assert "setToNextExtent" in error.message and "not available" in error.message
     assert collection.added == []
 
 

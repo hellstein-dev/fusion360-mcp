@@ -82,6 +82,14 @@ RibDepthArg = Annotated[
     ),
 ]
 RibFlip = Annotated[bool, Field(description="Grow the other way from the sketch plane")]
+RibTarget = Annotated[
+    str | None,
+    Field(
+        min_length=1,
+        description="Body the rib/web is built on and joined to; default: the one solid body "
+        "the curves touch",
+    ),
+]
 IsSolidArg = Annotated[
     bool,
     Field(
@@ -562,6 +570,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         thickness_location: RibLocationArg = "symmetric",
         depth: RibDepthArg = None,
         flip: RibFlip = False,
+        target_body: RibTarget = None,
         units: UnitsArg = "mm",
     ) -> CallToolResult:
         """Add a rib (a thin stiffening wall) from open sketch curves, joined to the body
@@ -570,13 +579,18 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         Units: thickness and depth.distance are in `units` (default mm), a string is a
         Fusion expression ("wall"). Refs: open sketch curves from sketch_draw (a line or arc
         drawn in a sketch on a plane cutting the body, e.g. a construction_plane through the
-        corner); circles and closed splines are refused. The rib is always joined to the
-        existing body (no operation parameter).
+        corner); circles and closed splines are refused. The rib is always joined to
+        `target_body` (no operation parameter); without it, to the one solid body of the
+        curves' component that a curve touches.
 
         Errors: closed curve, wrong thickness_location or depth -> INVALID_PARAMS (nothing
-        changed); a Fusion API version without rib features -> FUSION_API_ERROR "not
-        available" with no change (use execute_python then); a rib Fusion computes with an
-        error -> FUSION_API_ERROR and the timeline is rolled back.
+        changed); no target_body and the curves touch no body or several -> INVALID_PARAMS
+        with details.candidates (body refs to pass as target_body); thickness_location
+        "side2" is not available in the current Fusion API (FUSION_API_ERROR, no change):
+        use "side1" with the curve drawn the other way; a Fusion API version without rib
+        features -> FUSION_API_ERROR "not available" with no change (use execute_python
+        then); a rib Fusion computes with an error -> FUSION_API_ERROR and the timeline is
+        rolled back.
 
         Returns {"feature": {ref, type, name}, "health": {"state": ok|warning|error|unknown,
         "message"}, "created_bodies": [...], "modified_bodies": [{ref, type, name}] (the body
@@ -590,6 +604,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
             thickness_location=thickness_location,
             depth=depth,
             flip=flip,
+            target_body=target_body,
             units=units,
         )
         return await call_bridge(bridge, "feature.rib", params)
@@ -601,6 +616,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         thickness_location: RibLocationArg = "symmetric",
         depth: RibDepthArg = None,
         flip: RibFlip = False,
+        target_body: RibTarget = None,
         units: UnitsArg = "mm",
     ) -> CallToolResult:
         """Add a web - a network of thin walls from several open sketch curves (e.g. a grid
@@ -608,11 +624,15 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
 
         Units: thickness and depth.distance are in `units` (default mm), a string is a
         Fusion expression. Refs: open sketch curves from sketch_draw, all in one sketch
-        inside the body; circles and closed splines are refused. Always joined to the body
-        (no operation parameter).
+        inside the body; circles and closed splines are refused. Always joined to
+        `target_body` (no operation parameter); without it, to the one solid body of the
+        curves' component that a curve touches.
 
         Errors: closed curve, wrong thickness_location or depth -> INVALID_PARAMS (nothing
-        changed); a Fusion API version without web features -> FUSION_API_ERROR "not
+        changed); no target_body and the curves touch no body or several -> INVALID_PARAMS
+        with details.candidates (body refs to pass as target_body); thickness_location
+        "side2" is not available in the current Fusion API (FUSION_API_ERROR, no change);
+        a Fusion API version without web features -> FUSION_API_ERROR "not
         available" with no change (use execute_python then); a web Fusion computes with an
         error -> FUSION_API_ERROR and the timeline is rolled back.
 
@@ -629,6 +649,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
             thickness_location=thickness_location,
             depth=depth,
             flip=flip,
+            target_body=target_body,
             units=units,
         )
         return await call_bridge(bridge, "feature.web", params)
