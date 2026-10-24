@@ -6,11 +6,13 @@
 ``inspect_physical_properties`` changes; ``appearance_set_color("#FF0000")`` colours it and
 ``material_get`` reports both.
 
-``test_export_and_import``: the cube is exported to STEP, IGES and F3D (``export_cad``), to
-STL, 3MF and OBJ (``export_mesh``) and its sketch to DXF (``export_sketch_dxf``) in a temporary
-directory; every file is non-empty and a repeat without ``overwrite`` fails with
-``reason = "exists"``. The STEP and STL files are imported back (``import_file``) as a new
-occurrence and a mesh body.
+``test_export[<ext>]``: the cube is exported to STEP, IGES and F3D (``export_cad``), to STL,
+3MF and OBJ (``export_mesh``) and its sketch to DXF (``export_sketch_dxf``) in a temporary
+directory, one test per format; every file is non-empty and a repeat without ``overwrite``
+fails with ``reason = "exists"``. A format the Fusion license does not allow
+(``details.reason = "license_restricted"``, c15 D3) is skipped with that reason.
+``test_export_and_import``: the STEP and STL files are imported back (``import_file``) as a
+new occurrence and a mesh body.
 
 Every document is closed without saving. Skipped when the bridge is not reachable.
 """
@@ -134,24 +136,49 @@ def test_material_and_color(document: dict[str, Any]) -> None:
     assert got["appearance"]["name"] == colored["appearance"]["name"]
 
 
-def test_export_and_import(document: dict[str, Any], tmp_path: Path) -> None:
+# (file extension, tool, extra arguments); the sketch DXF gets the cube's sketch.
+EXPORTS = [
+    ("step", "export_cad", {}),
+    ("igs", "export_cad", {}),
+    ("f3d", "export_cad", {}),
+    ("stl", "export_mesh", {"refinement": "high"}),
+    ("3mf", "export_mesh", {}),
+    ("obj", "export_mesh", {}),
+    ("dxf", "export_sketch_dxf", {}),
+]
+
+
+def export(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    """``tool`` result; skip when the Fusion license does not allow the format (c15 D3)."""
+    result = call_raw(tool, args)
+    text = result_text(result)
+    if result.is_error and '"license_restricted"' in text:
+        pytest.skip(f"license_restricted: {text.splitlines()[0]}")
+    assert not result.is_error, text
+    out: dict[str, Any] = json.loads(text)
+    return out
+
+
+@pytest.mark.parametrize(("ext", "tool", "extra"), EXPORTS, ids=[e[0] for e in EXPORTS])
+def test_export(
+    document: dict[str, Any], tmp_path: Path, ext: str, tool: str, extra: dict[str, Any]
+) -> None:
     sketch, _ = cube()
-    exports = [
-        ("export_cad", {"path": str(tmp_path / "cube.step")}),
-        ("export_cad", {"path": str(tmp_path / "cube.igs")}),
-        ("export_cad", {"path": str(tmp_path / "cube.f3d")}),
-        ("export_mesh", {"path": str(tmp_path / "cube.stl"), "refinement": "high"}),
-        ("export_mesh", {"path": str(tmp_path / "cube.3mf")}),
-        ("export_mesh", {"path": str(tmp_path / "cube.obj")}),
-        ("export_sketch_dxf", {"sketch": sketch, "path": str(tmp_path / "cube.dxf")}),
-    ]
-    for tool, args in exports:
-        out = call(tool, args)
-        for written in out["files"]:
-            assert written["size_bytes"] > 0, (tool, out)
-            assert os.path.getsize(written["path"]) == written["size_bytes"]
-        repeat = call_raw(tool, args)
-        assert repeat.is_error and '"exists"' in result_text(repeat), result_text(repeat)
+    args = {"path": str(tmp_path / f"cube.{ext}"), **extra}
+    if tool == "export_sketch_dxf":
+        args["sketch"] = sketch
+    out = export(tool, args)
+    for written in out["files"]:
+        assert written["size_bytes"] > 0, (tool, out)
+        assert os.path.getsize(written["path"]) == written["size_bytes"]
+    repeat = call_raw(tool, args)
+    assert repeat.is_error and '"exists"' in result_text(repeat), result_text(repeat)
+
+
+def test_export_and_import(document: dict[str, Any], tmp_path: Path) -> None:
+    cube()
+    export("export_cad", {"path": str(tmp_path / "cube.step")})
+    export("export_mesh", {"path": str(tmp_path / "cube.stl"), "refinement": "high"})
 
     step = call("import_file", {"path": str(tmp_path / "cube.step")})
     assert step["format"] == "step"

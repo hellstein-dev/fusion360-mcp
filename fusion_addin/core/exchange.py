@@ -21,8 +21,21 @@ from fusion_mcp.protocol.paths import check_output_path
 MTIME_SLACK_S = 2.0
 
 
+# Fusion's message when the user's license does not allow the format (c15 D3), e.g. "3 : Cannot
+# execute the export operation ... as the user is restricted."
+LICENSE_RESTRICTED_MARK = "user is restricted"
+
+
 def _export_failed(path: str, why: str) -> BridgeError:
     return BridgeError(ErrorCode.FUSION_API_ERROR, f"export failed: {why}", {"path": path})
+
+
+def _license_restricted(path: str, fmt: str, why: str) -> BridgeError:
+    return BridgeError(
+        ErrorCode.FUSION_API_ERROR,
+        f"export of {fmt} is not allowed by this Fusion license",
+        {"path": path, "reason": "license_restricted", "format": fmt, "fusion_message": why},
+    )
 
 
 def _size(path: str) -> int:
@@ -67,7 +80,10 @@ def run_export(
     except BridgeError:
         raise
     except Exception as exc:
-        raise _export_failed(target, str(exc) or type(exc).__name__) from exc
+        why = str(exc) or type(exc).__name__
+        if LICENSE_RESTRICTED_MARK in why:
+            raise _license_restricted(target, fmt, why) from exc
+        raise _export_failed(target, why) from exc
     if ok is False:
         raise _export_failed(target, "Fusion reported failure")
     if not os.path.isfile(target):

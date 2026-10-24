@@ -429,6 +429,26 @@ def test_set_color_repeat_reuses(m: Model) -> None:
     assert m.design.appearances.count == 1
 
 
+def test_set_color_straight_repeat_keeps_current_appearance(m: Model) -> None:
+    """The live smoke sequence (c15 5.2): the second call starts from the target's current
+    appearance - the copy the first call made - and must reuse it, not copy it again as
+    "MCP MCP Steel - Satin #FF0000 #FF0000"."""
+    m.body.appearance = m.library(1).appearances.itemById("app-steel-satin")
+    m.run(ah.appearance_set_color, target="body-1", color="#FF0000")
+    first = m.body.appearance
+    again = m.run(ah.appearance_set_color, target="body-1", color="#FF0000")
+    assert again["created"] is False
+    assert again["appearance"]["name"] == "MCP Steel - Satin #FF0000"
+    assert m.body.appearance is first
+    assert m.design.appearances.count == 1
+    # Another colour still starts from the current appearance and makes a new copy.
+    blue = m.run(ah.appearance_set_color, target="body-1", color="#0000FF")
+    assert blue["created"] is True and m.design.appearances.count == 2
+    # An explicit other name is honoured even when the colour matches.
+    named = m.run(ah.appearance_set_color, target="body-1", color="#0000FF", name="Blue")
+    assert named["created"] is True and m.body.appearance.name == "Blue"
+
+
 def test_set_color_with_base_and_name_and_alpha(m: Model) -> None:
     result = m.run(
         ah.appearance_set_color,

@@ -75,6 +75,8 @@ class FakeExportManager(_Hiding):
         self.write_file = True
         self.size = 128
         self.write_mtl = True
+        # Option kinds ("iges", ...) the user's license does not allow (c15 D3).
+        self.restricted: set[str] = set()
 
     def _make(self, kind: str, filename: str, geometry: Any) -> FakeExportOptions:
         options = FakeExportOptions(kind, filename, geometry)
@@ -115,6 +117,12 @@ class FakeExportManager(_Hiding):
 
     def execute(self, options: FakeExportOptions) -> bool:
         self.executed.append(options)
+        if options.kind in self.restricted:
+            # The live Fusion message (c15 D3).
+            raise RuntimeError(
+                "3 : Cannot execute the export operation to create the file in the format "
+                "specified by the ExportOptions as the user is restricted."
+            )
         if not self.result:
             return False
         if self.write_file:

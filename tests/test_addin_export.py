@@ -130,6 +130,30 @@ def test_run_export_execute_false(m: Model) -> None:
     assert info.value.code is ErrorCode.FUSION_API_ERROR and "export failed" in info.value.message
 
 
+def test_run_export_license_restricted(m: Model) -> None:
+    """Fusion refuses a format the license does not allow (c15 D3): a distinct reason."""
+    m.em.restricted.add("step")
+    with pytest.raises(BridgeError) as info:
+        _step(m)
+    error = info.value
+    assert error.code is ErrorCode.FUSION_API_ERROR
+    assert error.message == "export of step is not allowed by this Fusion license"
+    assert error.details["reason"] == "license_restricted"
+    assert error.details["format"] == "step"
+    assert error.details["path"] == m.path("a.step")
+    assert "user is restricted" in error.details["fusion_message"]
+
+
+def test_run_export_other_exception_is_export_failed(m: Model) -> None:
+    def boom(path: str) -> Any:
+        raise RuntimeError("3 : disk full")
+
+    with pytest.raises(BridgeError) as info:
+        _step(m, execute=boom)
+    assert info.value.message == "export failed: 3 : disk full"
+    assert "reason" not in info.value.details
+
+
 def test_run_export_empty_or_missing_file(m: Model) -> None:
     m.em.size = 0
     with pytest.raises(BridgeError) as info:

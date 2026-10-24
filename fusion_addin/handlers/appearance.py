@@ -140,6 +140,7 @@ def _default_name(base: Any, rgba: tuple[int, int, int, int]) -> str:
 def appearance_set_color(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     rgba = parse_color(params.get("color"))
     target = _target(ctx, params)
+    current = None
     if params.get("base") is not None:
         base, _ = find_appearance(ctx, params["base"], param="base")
     else:
@@ -150,8 +151,14 @@ def appearance_set_color(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
                 "the target has no appearance to start from: pass 'base' (see appearance_list)",
                 {"param": "base"},
             )
-    name = ctx.require(params, "name", str, None) or _default_name(base, rgba)
+        current = base
+    name = ctx.require(params, "name", str, None)
     appearances = ctx.design.appearances
+    if current is not None and name in (None, current.name) and _rgba_of(current) == rgba:
+        # The target already shows this colour (a repeated call, c15 5.2): reuse its
+        # appearance instead of copying it under a "MCP MCP ..." name.
+        return _color_result(ctx, target, current, False, rgba)
+    name = name or _default_name(base, rgba)
     with Compensation() as undo:
         existing = appearances.itemByName(name)
         if existing is not None and _rgba_of(existing) == rgba:
@@ -162,6 +169,12 @@ def appearance_set_color(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
             created = True
             _set_rgba(appearance, rgba)
         _assign(undo, target, appearance)
+    return _color_result(ctx, target, appearance, created, rgba)
+
+
+def _color_result(
+    ctx: Any, target: Any, appearance: Any, created: bool, rgba: tuple[int, int, int, int]
+) -> dict[str, Any]:
     return {
         "target": ctx.refs.to_ref(target),
         "appearance": describe_item(appearance, DESIGN),
