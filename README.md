@@ -139,6 +139,72 @@ The `sketch_*` tools (`sketch_create`, `sketch_list`, `sketch_get`, `sketch_prof
 - Changing a sketch that features already use can break later timeline features. Check
   feature health afterwards (`inspect_tree`).
 
+## Solid features
+
+The `feature_*` tools turn sketches into solids and modify bodies, one parametric timeline
+feature per call:
+
+| Tool | What it does |
+|------|--------------|
+| `feature_extrude` | Extrude profiles, planar faces or sketch texts: one side, two sides or symmetric; distance, to an entity or through all; taper, start offset, thin wall |
+| `feature_revolve` | Revolve profiles around a sketch line, construction axis or straight edge: full, angle, two angles or to an entity |
+| `feature_sweep` | Sweep profiles along sketch curves or edges, with twist, taper, a guide rail and path share |
+| `feature_loft` | Loft through profiles, planar faces and end points, with end conditions, rails or a centerline |
+| `feature_rib`, `feature_web` | Thin stiffening walls from open sketch curves, joined to the body |
+| `feature_hole` | Simple, counterbore or countersink holes at a point, sketch points, offsets from edges or a circular edge's centre; optional `thread` makes a tapped hole in the same call |
+| `feature_thread` | Cosmetic or modeled thread on cylindrical faces (hole or shaft is detected) |
+| `feature_thread_options` | Read-only lookup of thread types, sizes, designations, classes and a recommendation for a diameter |
+| `feature_fillet` | Constant, variable or chord-length fillets on edges |
+| `feature_rule_fillet` | Fillet all edges of faces/features, or the edges between two sets |
+| `feature_chamfer` | Equal, two-distance or distance-angle chamfers |
+| `feature_shell` | Hollow a body, removing faces (open shell) or closed, inside and/or outside |
+| `feature_draft` | Tilt faces by a draft angle about a neutral plane |
+| `feature_offset_faces` | Press-pull faces by a signed distance |
+
+- **Units.** A plain number is a length in the tool's `units` (default mm; `cm`, `m`, `in`,
+  `ft` also work) or an angle in degrees. Shares of a path, weights and counts are plain
+  numbers. A string is a Fusion expression (`"wall * 2"`, `"5 deg"`) and keeps the feature
+  driven by user parameters.
+- **Where refs come from.** Profiles come from `sketch_draw` / `sketch_profiles`
+  (`profile:<sketch>@x,y`) or a spec such as `{"sketch": <ref>, "all": true}`. Sketch
+  curves and sketch points (paths, rails, rib curves, hole points) come from the `refs` of
+  `sketch_draw`. Faces, edges, vertices and bodies come from `inspect_query` /
+  `inspect_describe`. Planes, axes and points come from `construction_plane`,
+  `construction_axis`, `construction_point` or `origin:XY|XZ|YZ|X|Y|Z|O`. **Face, edge and
+  body refs go stale after later features**, so query them again from the latest model
+  instead of reusing old ones.
+- **Operations.** Extrude, revolve, sweep and loft take `operation` = `new_body` (default),
+  `join`, `cut`, `intersect` or `new_component`. `participant_bodies` limits which bodies
+  join/cut/intersect act on. Holes always cut, and ribs and webs always join.
+- **Result.** Every feature tool returns `{"feature": {ref, type, name}, "health": {"state":
+  ok|warning|error|unknown, "message"}, "created_bodies", "modified_bodies",
+  "removed_bodies"}`, plus `component` for `new_component`, `holes` (the count) and
+  `thread` for `feature_hole`, and `thread` for `feature_thread`. Body geometry is not
+  repeated, so measure it with the `inspect_*` tools.
+- **Health and rollback.** Bad input (a missing field for the chosen mode, a wrong entity
+  kind, an unknown thread designation with `details.available`) fails with
+  `INVALID_PARAMS` before anything changes. A stale profile point fails with
+  `ENTITY_NOT_FOUND` and the current profiles. If Fusion computes the feature in the error
+  state, the tool fails with `FUSION_API_ERROR` (`details.health`, `details.feature_type`)
+  and the timeline is rolled back. A tapped hole whose thread fails leaves neither the hole
+  nor the thread. A warning keeps the feature and is reported in `health`. A feature the
+  running Fusion API lacks (rib, web, rule or chord fillet on an old version) fails with
+  `FUSION_API_ERROR` "... not available" and changes nothing, so use `execute_python`.
+
+Example: an open housing with four counterbored holes and one M5 tapped hole:
+
+```text
+sketch_create(plane="origin:XY") -> sketch_draw(rectangle 80 x 50) -> profiles[0].ref
+feature_extrude(profiles=[<profile>], side1={"type": "distance", "distance": 20})
+feature_fillet(edges=<inspect_query edge, line, direction [0,0,1]>, radius=5)
+feature_shell(faces=[<inspect_query face, normal [0,0,-1]>], inside_thickness=3)
+sketch_create(plane=<top face>) -> sketch_draw(4 points) -> refs
+feature_hole(placement={"type": "sketch_points", "points": [...]}, kind="counterbore",
+             diameter=5.5, cb_diameter=9, cb_depth=1.5, extent={"type": "through_all"})
+feature_hole(placement={"type": "point", "face": <top face>, "point": [0, 0, 20]},
+             diameter=4.2, extent={"type": "through_all"}, thread={"designation": "M5x0.8"})
+```
+
 ## Limitations
 
 - **Timeouts.** Every request has a timeout (`execute_python` takes `timeout_s`, default
