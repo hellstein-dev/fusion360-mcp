@@ -418,7 +418,17 @@ class FakeSketchPoint(FakeSketchEntity):
 class FakeSketchCurve(FakeSketchEntity):
     def __init__(self, sketch: SketchApiMixin) -> None:
         super().__init__(sketch)
-        self.isConstruction = False
+        self._construction = False
+
+    @property
+    def isConstruction(self) -> bool:
+        return self._construction
+
+    @isConstruction.setter
+    def isConstruction(self, value: bool) -> None:
+        # Construction curves bound no profiles: a change invalidates the profile cache.
+        self._construction = bool(value)
+        self._sketch._touch()
 
     def _points(self) -> list[FakeSketchPoint]:
         raise NotImplementedError

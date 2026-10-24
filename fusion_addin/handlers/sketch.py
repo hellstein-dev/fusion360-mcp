@@ -20,8 +20,14 @@ from typing import Any
 from fusion_mcp.protocol.errors import BridgeError, ErrorCode
 from fusion_mcp.protocol.units import length_from_internal
 
+from ..core.dispatcher import to_bridge_error
 from ..core.registry import handler
-from ..sketch import describe, math2d, planes, profiles, space
+from ..sketch import constraints as draw_constraints
+from ..sketch import describe, edit, math2d, planes, profiles, space
+from ..sketch import dimensions as draw_dimensions
+from ..sketch import geometry as draw_geometry
+from ..sketch.journal import SketchJournal
+from ..sketch.resolve import BatchScope
 
 SKETCH_TYPE = "Sketch"
 DEFAULT_LIMIT = 500
@@ -265,3 +271,373 @@ def sketch_profiles(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         # ``locate`` is ``math2d.point_in_region`` over the region (outer minus holes).
         shapes = [s for s in shapes if s.locate(contains) == math2d.INSIDE]
     return {"profiles": profiles.summarize_shapes(shapes)}
+
+
+# === draw, constrain, dimension, dimension_set (D6, D7, D9, D10; tasks 7.1-7.4) ==============
+#
+# All or nothing (INV-5): every item is validated before the first API call, the mutation
+# runs inside a ``SketchJournal`` and an item error carries ``details.phase`` (``geometry``,
+# ``constraints``, ``dimensions`` or ``updates``), ``details.index`` and ``details.id``.
+
+MAX_BATCH = draw_geometry.MAX_ITEMS
+PHASE_GEOMETRY = draw_geometry.PHASE
+PHASE_CONSTRAINTS = "constraints"
+PHASE_DIMENSIONS = "dimensions"
+PHASE_UPDATES = "updates"
+
+
+class _Phase:
+    """Tag an escaping item error with ``details.phase`` (``index``/``id`` default to
+    ``None``; ``ids[index]`` names the item when given). A non-``BridgeError`` (Fusion's
+    ``RuntimeError``) becomes ``FUSION_API_ERROR``."""
+
+    def __init__(self, phase: str, ids: list[str | None] | None = None) -> None:
+        self.phase = phase
+        self.ids = ids
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: object
+    ) -> None:
+        if not isinstance(exc, Exception):
+            return
+        error = to_bridge_error(exc)
+        error.details["phase"] = self.phase
+        index = error.details.setdefault("index", None)
+        item_id = None
+        if self.ids is not None and isinstance(index, int) and 0 <= index < len(self.ids):
+            item_id = self.ids[index]
+        error.details.setdefault("id", item_id)
+        if error is not exc:
+            raise error from exc
+        # A BridgeError propagates as is, tagged in place.
+
+
+def _batch(ctx: Any, params: dict[str, Any], name: str, required: bool) -> list[Any]:
+    """A list parameter of at most ``MAX_BATCH`` items (non-empty when ``required``)."""
+    value: list[Any] = (
+        ctx.require(params, name, list) if required else ctx.require(params, name, list, [])
+    )
+    if required and not value:
+        raise _invalid(f"parameter '{name}' must not be empty", param=name)
+    if len(value) > MAX_BATCH:
+        raise _invalid(
+            f"parameter '{name}' has {len(value)} items, at most {MAX_BATCH} per call",
+            param=name,
+            reason="too_many",
+        )
+    return value
+
+
+def _return_profiles(ctx: Any, params: dict[str, Any]) -> bool:
+    return bool(ctx.require(params, "return_profiles", bool, True))
+
+
+def _refresh_dimensions(ctx: Any, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Re-describe dimensions created while compute was deferred: a driven dimension's
+    value is measured by the solver, which runs once ``isComputeDeferred`` is restored."""
+    fresh: list[dict[str, Any]] = []
+    for result in results:
+        ref = result.get("ref")
+        token = ref.get("ref") if isinstance(ref, dict) else None
+        try:
+            dim = ctx.refs.resolve(token) if isinstance(token, str) else None
+            fresh.append({**result, **describe.describe_dimension(dim)} if dim else result)
+        except Exception:
+            fresh.append(result)
+    return fresh
+
+
+@handler("sketch.draw", mutating=True)
+def sketch_draw(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    sketch = resolve_sketch(ctx, params)
+    items = _batch(ctx, params, "items", required=True)
+    constraint_items = _batch(ctx, params, "constraints", required=False)
+    dimension_items = _batch(ctx, params, "dimensions", required=False)
+    return_profiles = _return_profiles(ctx, params)
+    scope = BatchScope(ctx, sketch)  # ctx.units honours the ``units`` param
+
+    # D6: the whole batch is checked before anything is created; constraints and dimensions
+    # may name the local ids the geometry items declare.
+    specs = draw_geometry.validate_items(scope, items)
+    with _Phase(PHASE_CONSTRAINTS):
+        draw_constraints.validate_constraints(scope, constraint_items)
+    with _Phase(PHASE_DIMENSIONS):
+        draw_dimensions.validate_dimensions(scope, dimension_items)
+
+    with SketchJournal(sketch) as journal:
+        journal.defer()
+        draw_geometry.build_items(scope, journal, specs)
+        with _Phase(PHASE_CONSTRAINTS):
+            constraints_out = draw_constraints.apply_constraints(
+                scope, journal, constraint_items, validate=False
+            )
+        with _Phase(PHASE_DIMENSIONS):
+            dimensions_out = draw_dimensions.apply_dimensions(
+                scope, journal, dimension_items, validate=False
+            )
+        journal.undefer()  # before measuring dimensions and computing profiles (D6)
+        return {
+            "sketch": describe.entity_ref(sketch),
+            "refs": scope.refs(),
+            "constraints": constraints_out,
+            "dimensions": _refresh_dimensions(ctx, dimensions_out),
+            **sketch_state(sketch, return_profiles),
+            "warnings": scope.warnings,
+        }
+
+
+@handler("sketch.constrain", mutating=True)
+def sketch_constrain(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    sketch = resolve_sketch(ctx, params)
+    items = _batch(ctx, params, "constraints", required=True)
+    return_profiles = _return_profiles(ctx, params)
+    scope = BatchScope(ctx, sketch)
+    with _Phase(PHASE_CONSTRAINTS):
+        draw_constraints.validate_constraints(scope, items)
+    with SketchJournal(sketch) as journal:
+        with _Phase(PHASE_CONSTRAINTS):
+            out = draw_constraints.apply_constraints(scope, journal, items, validate=False)
+        return {"constraints": out, **sketch_state(sketch, return_profiles)}
+
+
+@handler("sketch.dimension", mutating=True)
+def sketch_dimension(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    sketch = resolve_sketch(ctx, params)
+    items = _batch(ctx, params, "dimensions", required=True)
+    return_profiles = _return_profiles(ctx, params)
+    scope = BatchScope(ctx, sketch)  # ``units``: numeric ``text_at``
+    with _Phase(PHASE_DIMENSIONS):
+        draw_dimensions.validate_dimensions(scope, items)
+    with SketchJournal(sketch) as journal:
+        with _Phase(PHASE_DIMENSIONS):
+            out = draw_dimensions.apply_dimensions(scope, journal, items, validate=False)
+        return {"dimensions": out, **sketch_state(sketch, return_profiles)}
+
+
+@handler("sketch.dimension_set", mutating=True)
+def sketch_dimension_set(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    sketch = resolve_sketch(ctx, params)
+    updates = _batch(ctx, params, "updates", required=True)
+    return_profiles = _return_profiles(ctx, params)
+    scope = BatchScope(ctx, sketch)
+    ids = [
+        u.get("dimension") if isinstance(u, dict) and isinstance(u.get("dimension"), str) else None
+        for u in updates
+    ]
+    with SketchJournal(sketch) as journal:
+        # ``apply_updates`` validates every update before changing the first one; the
+        # journal restores earlier updates if a later one fails.
+        with _Phase(PHASE_UPDATES, ids):
+            out = draw_dimensions.apply_updates(scope, journal, updates)
+        return {"dimensions": out, **sketch_state(sketch, return_profiles)}
+
+
+# === editing: set_construction ... project (D11; tasks 8.1-8.11) =============================
+#
+# Logic lives in ``fusion_addin.sketch.edit``. Each edit runs in a ``SketchJournal`` (INV-5)
+# and reads ``status``/``profiles`` inside the journal block, so a failure there still rolls
+# the edit back. ``sketch.delete`` is the documented non-atomic exception (north-star INV-5):
+# every ref is validated before the first deletion.
+
+EDIT_POINT_PARAM = (str, list, dict)
+EDIT_VALUE_PARAM = (int, float, str)
+PATTERN_FIELDS: dict[str, tuple[str, ...]] = {
+    "rectangular": ("count_x", "spacing_x", "count_y", "spacing_y", "angle", "direction"),
+    "circular": ("center", "count", "angle"),
+}
+
+
+def _ref_list(ctx: Any, params: dict[str, Any], name: str) -> list[str]:
+    """Required non-empty list (at most ``MAX_BATCH``) of entity ref strings."""
+    values = _batch(ctx, params, name, required=True)
+    for index, value in enumerate(values):
+        if not isinstance(value, str) or not value:
+            raise _invalid(
+                f"parameter '{name}[{index}]' must be an entity ref string",
+                param=name,
+                index=index,
+            )
+    return [str(v) for v in values]
+
+
+def _translate_cm(ctx: Any, params: dict[str, Any]) -> tuple[float, float]:
+    """``translate`` ``[dx, dy]`` (request units, default ``[0, 0]``) -> cm."""
+    value = params.get("translate")
+    if value is None:
+        return (0.0, 0.0)
+    if (
+        not isinstance(value, list | tuple)
+        or len(value) != 2
+        or not all(
+            isinstance(c, int | float) and not isinstance(c, bool) and math.isfinite(c)
+            for c in value
+        )
+    ):
+        raise _invalid(
+            "parameter 'translate' must be [dx, dy]: two finite numbers (sketch mm)",
+            param="translate",
+        )
+    return (float(ctx.units.length(value[0])), float(ctx.units.length(value[1])))
+
+
+def _edit(
+    ctx: Any,
+    params: dict[str, Any],
+    fn: Callable[[BatchScope, SketchJournal], dict[str, Any]],
+) -> dict[str, Any]:
+    """Run one journaled edit and append ``status``/``profiles`` (D12)."""
+    sketch = resolve_sketch(ctx, params)
+    return_profiles = _return_profiles(ctx, params)
+    scope = BatchScope(ctx, sketch)
+    with SketchJournal(sketch) as journal:
+        result = fn(scope, journal)
+        if scope.warnings:
+            result["warnings"] = [*result.get("warnings", []), *scope.warnings]
+        journal.undefer()
+        result.update(sketch_state(sketch, return_profiles))
+    return result
+
+
+@handler("sketch.set_construction", mutating=True)
+def sketch_set_construction(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    curves = _ref_list(ctx, params, "curves")
+    construction = bool(ctx.require(params, "construction", bool, True))
+    return _edit(
+        ctx, params, lambda scope, j: edit.set_construction(scope, j, curves, construction)
+    )
+
+
+@handler("sketch.delete", mutating=True)
+def sketch_delete(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    sketch = resolve_sketch(ctx, params)
+    entities = _ref_list(ctx, params, "entities")
+    return_profiles = _return_profiles(ctx, params)
+    # Not journaled: Fusion cannot undo a deletion (the INV-5 exception, validated first).
+    result = edit.delete(BatchScope(ctx, sketch), entities)
+    result.update(sketch_state(sketch, return_profiles))
+    return result
+
+
+@handler("sketch.transform", mutating=True)
+def sketch_transform(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    entities = _ref_list(ctx, params, "entities")
+    translate = _translate_cm(ctx, params)
+    rotate = ctx.require(params, "rotate", EDIT_VALUE_PARAM, 0)
+    about = ctx.require(params, "about", EDIT_POINT_PARAM, [0, 0])
+    copy = bool(ctx.require(params, "copy", bool, False))
+
+    def run(scope: BatchScope, journal: SketchJournal) -> dict[str, Any]:
+        rotate_rad = edit.rotation_angle(scope, rotate, "rotate")
+        pivot = scope.position(about, "about")
+        return edit.transform(scope, journal, entities, translate, rotate_rad, pivot, copy)
+
+    return _edit(ctx, params, run)
+
+
+@handler("sketch.offset", mutating=True)
+def sketch_offset(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    curves = _ref_list(ctx, params, "curves")
+    distance = ctx.require(params, "distance", EDIT_VALUE_PARAM)
+    side_point = ctx.require(params, "side_point", EDIT_POINT_PARAM)
+    chain = bool(ctx.require(params, "chain", bool, True))
+    return _edit(
+        ctx,
+        params,
+        lambda scope, j: edit.offset(scope, j, curves, distance, side_point, chain),
+    )
+
+
+@handler("sketch.trim", mutating=True)
+def sketch_trim(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    curve = ctx.require(params, "curve", str)
+    point = ctx.require(params, "point", EDIT_POINT_PARAM)
+    return _edit(ctx, params, lambda scope, j: edit.trim(scope, curve, point))
+
+
+@handler("sketch.extend", mutating=True)
+def sketch_extend(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    curve = ctx.require(params, "curve", str)
+    point = ctx.require(params, "point", EDIT_POINT_PARAM)
+    return _edit(ctx, params, lambda scope, j: edit.extend(scope, curve, point))
+
+
+@handler("sketch.fillet", mutating=True)
+def sketch_fillet(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    curve1 = ctx.require(params, "curve1", str)
+    curve2 = ctx.require(params, "curve2", str)
+    radius = ctx.require(params, "radius", EDIT_VALUE_PARAM)
+    point1 = ctx.require(params, "point1", EDIT_POINT_PARAM, None)
+    point2 = ctx.require(params, "point2", EDIT_POINT_PARAM, None)
+    dimension = bool(ctx.require(params, "dimension", bool, True))
+    return _edit(
+        ctx,
+        params,
+        lambda scope, j: edit.fillet(scope, j, curve1, curve2, radius, point1, point2, dimension),
+    )
+
+
+@handler("sketch.mirror", mutating=True)
+def sketch_mirror(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    entities = _ref_list(ctx, params, "entities")
+    axis = ctx.require(params, "axis", str)
+    constrain = bool(ctx.require(params, "constrain", bool, True))
+    return _edit(ctx, params, lambda scope, j: edit.mirror(scope, j, entities, axis, constrain))
+
+
+@handler("sketch.pattern", mutating=True)
+def sketch_pattern(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    entities = _ref_list(ctx, params, "entities")
+    kind = ctx.require(params, "kind", str)
+    if kind not in PATTERN_FIELDS:
+        raise _invalid(
+            f"parameter 'kind' must be rectangular or circular, got {kind!r}",
+            param="kind",
+            expected=list(PATTERN_FIELDS),
+        )
+    allowed = set(PATTERN_FIELDS[kind])
+    foreign = sorted(
+        {
+            name
+            for names in PATTERN_FIELDS.values()
+            for name in names
+            if name not in allowed and params.get(name) is not None
+        }
+    )
+    if foreign:
+        raise _invalid(
+            f"parameters {foreign} do not apply to a {kind} pattern",
+            param=foreign[0],
+            unexpected=foreign,
+        )
+    if kind == "rectangular":
+        count_x = ctx.require(params, "count_x", int)
+        spacing_x = ctx.require(params, "spacing_x", EDIT_VALUE_PARAM)
+        count_y = ctx.require(params, "count_y", int, 1)
+        spacing_y = ctx.require(params, "spacing_y", EDIT_VALUE_PARAM, 0.0)
+        angle = ctx.require(params, "angle", EDIT_VALUE_PARAM, 0.0)
+        direction = ctx.require(params, "direction", str, None)
+        return _edit(
+            ctx,
+            params,
+            lambda scope, j: edit.rectangular_pattern(
+                scope, j, entities, count_x, spacing_x, count_y, spacing_y, angle, direction
+            ),
+        )
+    center = ctx.require(params, "center", EDIT_POINT_PARAM)
+    count = ctx.require(params, "count", int)
+    total = ctx.require(params, "angle", EDIT_VALUE_PARAM, 360.0)
+    return _edit(
+        ctx,
+        params,
+        lambda scope, j: edit.circular_pattern(scope, j, entities, center, count, total),
+    )
+
+
+@handler("sketch.project", mutating=True)
+def sketch_project(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    entities = _ref_list(ctx, params, "entities")
+    mode = ctx.require(params, "mode", str, "project")
+    return _edit(ctx, params, lambda scope, j: edit.project(scope, j, entities, mode))
