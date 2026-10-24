@@ -16,6 +16,7 @@ from . import (
     script,
     sketch,
     status,
+    surface,
     timeline,
     viewport,
 )
@@ -36,6 +37,7 @@ TOOL_MODULES = [
     feature_modify,
     pattern,
     body,
+    surface,
     timeline,
     assembly,
 ]
@@ -57,6 +59,7 @@ __all__ = [
     "script",
     "sketch",
     "status",
+    "surface",
     "timeline",
     "viewport",
 ]
