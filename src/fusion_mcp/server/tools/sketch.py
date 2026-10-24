@@ -116,8 +116,8 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         geometry (line {start, end}; circle {center, radius}; arc {center, radius, start, end,
         start_angle, sweep}; ...)}], `constraints` [{ref, type, entities}], `dimensions`
         [{ref, type, entities, value (mm|deg), unit, expression, parameter, driving}],
-        `texts`, `profiles` (as sketch_profiles). Each section holds at most `limit` items and
-        sets `truncated: true` when cut.
+        `texts`, `profiles` (as sketch_profiles). Each section is an object
+        {items: [≤ limit entries as above], total, truncated} — `truncated: true` when cut.
 
         Returns {"sketch", the requested sections, "transform" (see sketch_create),
         "status": {fully_constrained, under_constrained_count, under_constrained: [≤ 50
