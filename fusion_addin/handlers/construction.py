@@ -45,6 +45,9 @@ SETTERS: dict[str, dict[str, str]] = {
     "plane": {
         "offset": "setByOffset",
         "angle": "setByAngle",
+        "midplane": "setByTwoPlanes",
+        "two_edges": "setByTwoEdges",
+        "three_points": "setByThreePoints",
     },
     "axis": {},
     "point": {},

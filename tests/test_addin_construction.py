@@ -310,3 +310,68 @@ def test_component_ref_must_be_a_component() -> None:
     )
     assert err.code is ErrorCode.INVALID_PARAMS
     assert err.details == {"param": "component", "expected": "component", "got": "BRepBody"}
+
+
+# --- 3.3 midplane, two_edges, three_points ---------------------------------------------------
+
+
+def test_midplane_between_box_faces() -> None:
+    design, box = box_design()
+    top, bottom = face(box, "+z"), face(box, "-z")
+    params = {"method": "midplane", "plane": top.entityToken, "plane2": bottom.entityToken}
+    run(h.construction_plane, design, params)
+    name, args = setter_call(design.rootComponent.constructionPlanes)
+    assert name == "setByTwoPlanes"
+    assert args == (top, bottom)
+
+
+def test_midplane_needs_planar_second_plane() -> None:
+    design, box = box_design()
+    err = error(
+        h.construction_plane,
+        design,
+        {"method": "midplane", "plane": "origin:XY", "plane2": box.edges.item(0).entityToken},
+    )
+    assert err.details == {"param": "plane2", "expected": "planar", "got": "BRepEdge (line)"}
+
+
+def test_two_edges() -> None:
+    design, box = box_design()
+    one, two = box.edges.item(0), box.edges.item(1)
+    run(
+        h.construction_plane,
+        design,
+        {"method": "two_edges", "edge": one.entityToken, "edge2": two.entityToken},
+    )
+    assert setter_call(design.rootComponent.constructionPlanes) == ("setByTwoEdges", (one, two))
+
+
+def test_two_edges_accepts_origin_axes() -> None:
+    design = fake_construction_design()
+    root = design.rootComponent
+    params = {"method": "two_edges", "edge": "origin:X", "edge2": "origin:Y"}
+    run(h.construction_plane, design, params)
+    args = setter_call(root.constructionPlanes)[1]
+    assert args == (root.xConstructionAxis, root.yConstructionAxis)
+
+
+def test_three_points_mixes_vertices_and_origin_point() -> None:
+    design, box = box_design()
+    root = design.rootComponent
+    a, b = box.vertices.item(1), box.vertices.item(2)
+    params = {"method": "three_points", "points": [a.entityToken, b.entityToken, "origin:O"]}
+    run(h.construction_plane, design, params)
+    name, args = setter_call(root.constructionPlanes)
+    assert name == "setByThreePoints"
+    assert args == (a, b, root.originConstructionPoint)
+
+
+def test_three_points_kind_error_names_the_index() -> None:
+    design, box = box_design()
+    params = {
+        "method": "three_points",
+        "points": [box.vertices.item(1).entityToken, "origin:Z", "origin:O"],
+    }
+    err = error(h.construction_plane, design, params)
+    assert err.details == {"param": "points[1]", "expected": "point", "got": "ConstructionAxis"}
+    assert design.rootComponent.constructionPlanes.inputs == []
