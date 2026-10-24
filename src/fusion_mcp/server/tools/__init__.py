@@ -10,6 +10,7 @@ from . import (
     inspect,
     measure,
     parameter,
+    pattern,
     script,
     sketch,
     status,
@@ -30,6 +31,7 @@ TOOL_MODULES = [
     feature_sketch,
     feature_hole,
     feature_modify,
+    pattern,
 ]
 
 __all__ = [
@@ -43,6 +45,7 @@ __all__ = [
     "inspect",
     "measure",
     "parameter",
+    "pattern",
     "script",
     "sketch",
     "status",
