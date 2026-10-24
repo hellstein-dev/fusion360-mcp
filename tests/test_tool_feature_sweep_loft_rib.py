@@ -90,6 +90,7 @@ def test_sweep_defaults_and_result_pass_through() -> None:
         "path_extent": 1.0,
         "flip": False,
         "operation": "new_body",
+        "is_solid": True,
         "units": "mm",
     }
     assert result.is_error is False
@@ -213,6 +214,7 @@ def test_loft_with_rail_is_sent() -> None:
         "closed": False,
         "merge_tangent_edges": True,
         "operation": "new_body",
+        "is_solid": True,
         "units": "mm",
     }
     assert json.loads(result_text(result)) == result_data

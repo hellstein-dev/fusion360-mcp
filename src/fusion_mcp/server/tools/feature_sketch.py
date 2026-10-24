@@ -16,6 +16,7 @@ from mcp.types import CallToolResult
 from pydantic import Field
 
 from fusion_mcp.protocol.errors import BridgeError, ErrorCode
+from fusion_mcp.protocol.surfaces import SURFACE_OPERATIONS
 from fusion_mcp.server.app import call_bridge, error_result
 from fusion_mcp.server.bridge import Bridge
 from fusion_mcp.server.tools._feature_models import (
@@ -81,6 +82,13 @@ RibDepthArg = Annotated[
     ),
 ]
 RibFlip = Annotated[bool, Field(description="Grow the other way from the sketch plane")]
+IsSolidArg = Annotated[
+    bool,
+    Field(
+        description="true (default) = solid; false = surface body (new_body / new_component "
+        "only; close surfaces with surface_stitch, check is_solid)"
+    ),
+]
 
 
 def _invalid(message: str, **details: Any) -> BridgeError:
@@ -153,6 +161,21 @@ def _check_sweep(
         )
 
 
+def _check_surface(is_solid: bool, operation: str, thin: ThinOptions | None = None) -> None:
+    """Surface mode (c11 D12): ``is_solid=false`` only creates bodies, never a thin wall."""
+    if is_solid:
+        return
+    if operation not in SURFACE_OPERATIONS:
+        raise _invalid(
+            f"operation '{operation}' needs a solid; with is_solid=false use "
+            f"{' | '.join(SURFACE_OPERATIONS)}",
+            param="operation",
+            value=operation,
+        )
+    if thin is not None:
+        raise _invalid("parameter 'thin' cannot be used with is_solid=false", param="thin")
+
+
 def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
     @mcp.tool(name="feature_extrude")
     async def feature_extrude(
@@ -202,6 +225,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
                 'side1|side2|center, "thickness2"? (two_sides)}'
             ),
         ] = None,
+        is_solid: IsSolidArg = True,
         participant_bodies: Participants = None,
         units: UnitsArg = "mm",
     ) -> CallToolResult:
@@ -222,6 +246,10 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         - symmetric: side1 must be a distance; symmetric_full_length picks total vs half.
         A negative distance extrudes the other way. operation="cut" with through_all and
         direction="negative" cuts down through a body below the sketch.
+
+        Surface: is_solid=false extrudes a surface body (operation new_body / new_component,
+        no thin); profiles may then also be open sketch curve refs or edge refs (one kind,
+        connected curves are chained) - e.g. an open line becomes a wall sheet.
 
         Errors: wrong field for the mode or a wrong entity kind -> INVALID_PARAMS (nothing
         changed); a stale profile point -> ENTITY_NOT_FOUND with details.profiles (current
@@ -245,6 +273,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         """
         try:
             _check_extrude(mode, side1, side2, direction, taper2, symmetric_full_length, thin)
+            _check_surface(is_solid, operation, thin)
         except BridgeError as error:
             return error_result(error)
         params = to_params(
@@ -259,6 +288,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
             symmetric_full_length=symmetric_full_length or None,
             start=start,
             thin=thin,
+            is_solid=is_solid,
             participant_bodies=participant_bodies,
             units=units,
         )
@@ -283,6 +313,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
             ),
         ] = None,
         operation: OperationArg = "new_body",
+        is_solid: IsSolidArg = True,
         participant_bodies: Participants = None,
         units: UnitsArg = "mm",
     ) -> CallToolResult:
@@ -293,7 +324,8 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         `units` only applies to {"sketch", "point"} profile specs. Refs: profiles from
         sketch_draw / sketch_profiles; the axis is a sketch line ref (sketch_draw refs), a
         construction axis (construction_axis, origin:X|Y|Z) or a straight BRep edge
-        (inspect_query). The profile must lie on one side of the axis.
+        (inspect_query). The profile must lie on one side of the axis. is_solid=false
+        revolves a surface body (new_body / new_component only).
 
         Extents: full (default) = 360 deg; angle with symmetric=true splits the angle to
         both sides of the sketch plane; two_angles sets each side; to_entity revolves up to
@@ -315,11 +347,16 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         - feature_revolve(profiles=[...], axis=<sketch line ref>, extent={"type": "angle",
           "angle": 90, "symmetric": true}, operation="cut")
         """
+        try:
+            _check_surface(is_solid, operation)
+        except BridgeError as error:
+            return error_result(error)
         params = to_params(
             profiles=profiles,
             axis=axis,
             extent=extent,
             operation=operation,
+            is_solid=is_solid,
             participant_bodies=participant_bodies,
             units=units,
         )
@@ -374,6 +411,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         ] = 1.0,
         flip: Annotated[bool, Field(description="Sweep the other way along the path")] = False,
         operation: OperationArg = "new_body",
+        is_solid: IsSolidArg = True,
         participant_bodies: Participants = None,
         units: UnitsArg = "mm",
     ) -> CallToolResult:
@@ -386,7 +424,8 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         path and guide rail from sketch_draw (sketch curve refs, the path sketch usually lies
         on a plane perpendicular to the profile sketch) or BRep edges from inspect_query.
         Do not mix sketch curves and edges in one path. With path_chain=true one curve
-        is enough to take the whole connected chain.
+        is enough to take the whole connected chain. is_solid=false sweeps a surface
+        (new_body / new_component only); the profile may then be open sketch curves or edges.
 
         Rules: twist_angle / taper_angle with guide_rail -> INVALID_PARAMS; path_extent
         outside (0, 1] -> rejected; a path with gaps -> FUSION_API_ERROR. A feature Fusion
@@ -406,6 +445,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         """
         try:
             _check_sweep(guide_rail, twist_angle, taper_angle, rail_scaling)
+            _check_surface(is_solid, operation)
         except BridgeError as error:
             return error_result(error)
         with_rail = guide_rail is not None
@@ -421,6 +461,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
             path_extent=path_extent,
             flip=flip,
             operation=operation,
+            is_solid=is_solid,
             participant_bodies=participant_bodies,
             units=units,
         )
@@ -452,6 +493,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
             bool, Field(description="Merge tangent edges of the result (default true)")
         ] = True,
         operation: OperationArg = "new_body",
+        is_solid: IsSolidArg = True,
         participant_bodies: Participants = None,
         units: UnitsArg = "mm",
     ) -> CallToolResult:
@@ -467,7 +509,8 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
 
         Guides: rails (sketch curves or edges touching every section) or one centerline,
         never both. closed=true joins the last section back to the first (needs 3+ profile
-        sections and no point section).
+        sections and no point section). is_solid=false lofts a surface body (new_body /
+        new_component only).
 
         Units: angles in degrees, weights plain numbers; `units` only applies to
         {"sketch", "point"} profile specs. Errors: fewer than 2 sections, rails with a
@@ -487,6 +530,10 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
           {"entity": <sketch point ref>, "end_condition": "point_tangent", "weight": 2}],
           operation="join")
         """
+        try:
+            _check_surface(is_solid, operation)
+        except BridgeError as error:
+            return error_result(error)
         if rails and centerline is not None:
             return error_result(
                 _invalid(
@@ -502,6 +549,7 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
             closed=closed,
             merge_tangent_edges=merge_tangent_edges,
             operation=operation,
+            is_solid=is_solid,
             participant_bodies=participant_bodies,
             units=units,
         )

@@ -62,6 +62,7 @@ def test_extrude_defaults_and_result_pass_through() -> None:
         "mode": "one_side",
         "side1": {"type": "distance", "distance": 10.0},
         "taper1": 0.0,
+        "is_solid": True,
         "units": "mm",
     }
     assert result.is_error is False
@@ -99,6 +100,7 @@ def test_extrude_all_fields_are_sent() -> None:
         "taper2": 3.0,
         "start": {"type": "offset", "offset": 5.0},
         "thin": {"thickness": 2.0, "location": "center", "thickness2": 1.0},
+        "is_solid": True,
         "participant_bodies": ["body-1"],
         "units": "in",
     }
@@ -189,6 +191,7 @@ def test_revolve_default_extent_is_not_sent() -> None:
         "profiles": [PROFILE],
         "axis": "origin:Z",
         "operation": "new_body",
+        "is_solid": True,
         "units": "mm",
     }
     assert json.loads(result_text(result)) == RESULT

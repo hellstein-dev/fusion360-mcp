@@ -39,6 +39,7 @@ from fusion_mcp.protocol.features import (
 )
 from fusion_mcp.protocol.refs import is_origin_ref
 from fusion_mcp.protocol.sketch_refs import is_profile_ref
+from fusion_mcp.protocol.surfaces import SURFACE_OPERATIONS
 
 from ..core.entity_kinds import describe_kind, is_face, is_planar, require_kind
 from ..core.features import (
@@ -63,6 +64,7 @@ from ..core.features import (
 )
 from ..core.refs import type_name
 from ..core.registry import handler
+from ..core.surfaces import OPEN_PROFILE_TYPES, open_profile
 from ..sketch.resolve import CURVE_TYPES
 
 REVOLVE_EXTENT_TYPES = ("angle", "two_angles", "full", "to_entity")
@@ -152,18 +154,66 @@ def _finish(
         raise
 
 
-def _common(ctx: Any, params: dict[str, Any], allow_text: bool) -> tuple[Any, str, Any, Any]:
-    """``(profiles, operation, operation enum, participant bodies or None)``, validated."""
+def _is_solid(ctx: Any, params: dict[str, Any], operation: str) -> bool:
+    """``is_solid`` (c11 D12, default true); a surface (``false``) only creates bodies, so
+    ``operation`` must be ``new_body`` / ``new_component``."""
+    is_solid = _bool(ctx, params, "is_solid", True)
+    if not is_solid and operation not in SURFACE_OPERATIONS:
+        raise _invalid(
+            f"operation '{operation}' needs a solid; with is_solid=false use "
+            f"{' | '.join(SURFACE_OPERATIONS)}",
+            param="operation",
+            value=operation,
+            expected=list(SURFACE_OPERATIONS),
+        )
+    return is_solid
+
+
+def _open_refs(ctx: Any, specs: Any) -> list[Any] | None:
+    """The refs of ``specs`` if every one is a sketch curve or an edge (an open profile,
+    c11 D12); ``None`` if none is; a mix with closed profiles / faces -> ``INVALID_PARAMS``."""
+    spec_list = specs if isinstance(specs, list) else [specs]
+    kinds: list[bool] = []
+    for spec in spec_list:
+        if isinstance(spec, dict) or not isinstance(spec, str) or is_profile_ref(spec):
+            kinds.append(False)
+            continue
+        try:
+            entity = ctx.refs.resolve(spec)
+        except BridgeError as exc:
+            exc.details.setdefault("param", "profiles")
+            raise
+        kinds.append(type_name(entity) in OPEN_PROFILE_TYPES)
+    if not any(kinds):
+        return None
+    if not all(kinds):
+        raise _invalid(
+            "parameter 'profiles' mixes open curves / edges with closed profiles or faces",
+            param="profiles",
+            reason="mixed_profile",
+        )
+    return list(spec_list)
+
+
+def _common(
+    ctx: Any, params: dict[str, Any], allow_text: bool, allow_open: bool = False
+) -> tuple[Any, str, Any, Any, bool, Any]:
+    """``(profiles, operation, operation enum, participant bodies or None, is_solid,
+    component)``, validated. With ``allow_open`` and ``is_solid = false`` sketch curves /
+    edges become an open profile (c11 D12)."""
     operation = ctx.require(params, "operation", str, "new_body")
     op_enum = operation_enum(operation)
-    profiles = feature_profiles(
-        ctx,
-        ctx.require(params, "profiles", (list, str, dict)),
-        allow_faces=True,
-        allow_text=allow_text,
-    )
+    is_solid = _is_solid(ctx, params, operation)
+    specs = ctx.require(params, "profiles", (list, str, dict))
+    open_refs = _open_refs(ctx, specs) if allow_open and not is_solid else None
+    if open_refs is not None:
+        profiles = open_profile(ctx, open_refs, True, "profiles")
+        component = target_component(resolve_one(ctx, open_refs[0], OPEN_PROFILE_TYPES, "profiles"))
+    else:
+        profiles = feature_profiles(ctx, specs, allow_faces=True, allow_text=allow_text)
+        component = target_component(_first(profiles))
     bodies = participant_bodies(ctx, params.get("participant_bodies"), operation)
-    return profiles, operation, op_enum, bodies
+    return profiles, operation, op_enum, bodies, is_solid, component
 
 
 # --- extrude (D10) -------------------------------------------------------------------------
@@ -239,18 +289,24 @@ def _extrude_extent(ctx: Any, params: dict[str, Any], mode: str) -> tuple[str, t
 
 @handler("feature.extrude", mutating=True)
 def feature_extrude(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
-    """Extrude profiles / planar faces / sketch texts (D10); result per D8."""
-    profiles, operation, op_enum, bodies = _common(ctx, params, allow_text=True)
+    """Extrude profiles / planar faces / sketch texts (D10), or open curves / edges as a
+    surface (c11 D12); result per D8."""
+    if not _bool(ctx, params, "is_solid", True) and _given(params, "thin"):
+        raise _invalid("parameter 'thin' cannot be used with is_solid=false", param="thin")
+    profiles, operation, op_enum, bodies, is_solid, component = _common(
+        ctx, params, allow_text=True, allow_open=True
+    )
     mode = check_choice("mode", _opt(params, "mode", "one_side"), EXTRUDE_MODES)
     setter, extent_args = _extrude_extent(ctx, params, mode)
     start = params.get("start")
     start_def = start_definition(ctx, start) if start is not None else None
     thin = _thin(ctx, params, mode)
-    component = target_component(_first(profiles))
 
     before = _snapshot(component, bodies)
     extrudes = component.features.extrudeFeatures
     inp = extrudes.createInput(profiles, op_enum)
+    if not is_solid:
+        inp.isSolid = False
     _call("ExtrudeFeature", inp, setter, *extent_args)
     if start_def is not None:
         inp.startExtent = start_def
@@ -346,14 +402,17 @@ def _axis(ctx: Any, ref: Any, component: Any) -> Any:
 @handler("feature.revolve", mutating=True)
 def feature_revolve(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     """Revolve profiles / planar faces around an axis (D11); result per D8."""
-    profiles, operation, op_enum, bodies = _common(ctx, params, allow_text=False)
-    component = target_component(_first(profiles))
+    profiles, operation, op_enum, bodies, is_solid, component = _common(
+        ctx, params, allow_text=False
+    )
     axis = _axis(ctx, ctx.require(params, "axis", (str, dict)), component)
     setter, extent_args = _revolve_extent(ctx, params.get("extent"), profiles)
 
     before = _snapshot(component, bodies)
     revolves = component.features.revolveFeatures
     inp = revolves.createInput(profiles, axis, op_enum)
+    if not is_solid:
+        inp.isSolid = False
     if not hasattr(inp, setter):
         raise BridgeError(
             ErrorCode.FUSION_API_ERROR,
@@ -412,7 +471,9 @@ def _path_extent(params: dict[str, Any]) -> float:
 def feature_sweep(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     """Sweep profiles / planar faces along a path of sketch curves or edges (D12); optional
     guide rail with profile scaling; result per D8."""
-    profiles, operation, op_enum, bodies = _common(ctx, params, allow_text=False)
+    profiles, operation, op_enum, bodies, is_solid, component = _common(
+        ctx, params, allow_text=False, allow_open=True
+    )
     path_refs = ctx.require(params, "path", list)
     chain = _bool(ctx, params, "path_chain", True)
     rail_refs = ctx.require(params, "guide_rail", list, None)
@@ -442,7 +503,6 @@ def feature_sweep(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
         taper = angle_value(ctx, _opt(params, "taper_angle", 0), "taper_angle")
     extent = scalar_value(_path_extent(params), "path_extent")
     flip = _bool(ctx, params, "flip", False)
-    component = target_component(_first(profiles))
     path = make_path(ctx, component, path_refs, chain, "path")
     rail = None
     if rail_refs is not None:
@@ -451,6 +511,8 @@ def feature_sweep(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     before = _snapshot(component, bodies)
     sweeps = component.features.sweepFeatures
     inp = sweeps.createInput(profiles, path, op_enum)
+    if not is_solid:
+        inp.isSolid = False
     inp.orientation = getattr(adsk.fusion.SweepOrientationTypes, _ORIENTATION_ATTRS[orientation])
     if rail is not None:
         inp.guideRail = rail
@@ -593,6 +655,7 @@ def feature_loft(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     rails or a centerline (D13); result per D8."""
     operation = ctx.require(params, "operation", str, "new_body")
     op_enum = operation_enum(operation)
+    is_solid = _is_solid(ctx, params, operation)
     raw_sections = ctx.require(params, "sections", list)
     if len(raw_sections) < 2:
         raise _invalid(
@@ -629,6 +692,8 @@ def feature_loft(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     before = _snapshot(component, bodies)
     lofts = component.features.loftFeatures
     inp = lofts.createInput(op_enum)
+    if not is_solid:
+        inp.isSolid = False
     for index, (entity, _, setter, args) in enumerate(sections):
         section = inp.loftSections.add(entity)
         if section is None:
