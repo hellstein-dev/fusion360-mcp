@@ -76,10 +76,10 @@ def test_check_health_warning_and_ok_pass() -> None:
 
 def test_timeline_errors() -> None:
     timeline = FakeTimeline(["Sketch1", "Extrude1", "Fillet1"])
-    timeline.item(0).healthState = HS.HealthyFeatureHealthState  # type: ignore[attr-defined]
+    timeline.item(0).healthState = HS.HealthyFeatureHealthState
     bad = timeline.item(2)
-    bad.healthState = HS.ErrorFeatureHealthState  # type: ignore[attr-defined]
-    bad.errorOrWarningMessage = "radius too big"  # type: ignore[attr-defined]
+    bad.healthState = HS.ErrorFeatureHealthState
+    bad.errorOrWarningMessage = "radius too big"
     bad.entity.entityToken = "tok-fillet"
     design = FakeDesign(timeline=timeline)
     assert timeline_errors(design) == [
@@ -89,7 +89,7 @@ def test_timeline_errors() -> None:
 
 def test_timeline_errors_without_entity_ref_and_direct_design() -> None:
     timeline = FakeTimeline(["Group1"])
-    timeline.item(0).healthState = HS.ErrorFeatureHealthState  # type: ignore[attr-defined]
+    timeline.item(0).healthState = HS.ErrorFeatureHealthState
     timeline.item(0).entity = None
     assert timeline_errors(FakeDesign(timeline=timeline))[0]["ref"] == "timeline:Group1"
     assert timeline_errors(FakeDesign(parametric=False)) == []

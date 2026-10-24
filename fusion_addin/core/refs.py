@@ -3,7 +3,9 @@
 An entity goes out as ``{"ref": <entityToken>, "type": "BRepFace", "name": ...}``. Objects
 without a token get a typed name path: ``param:<name>``, ``component:<name>``,
 ``occurrence:<fullPathName>``. Origin planes/axes/point go out as ``origin:<NAME>`` (c03
-D15). ``resolve`` turns a ref back into the entity or raises ``ENTITY_NOT_FOUND``.
+D15). Timeline groups (no token) go out as ``timeline:<name>``, which resolves to the
+``TimelineObject`` of that name (c09 D1). ``resolve`` turns a ref back into the entity or
+raises ``ENTITY_NOT_FOUND``.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from fusion_mcp.protocol.refs import format_origin_ref, is_origin_ref, parse_ori
 PARAM_PREFIX = "param:"
 COMPONENT_PREFIX = "component:"
 OCCURRENCE_PREFIX = "occurrence:"
+TIMELINE_PREFIX = "timeline:"
 
 
 def type_name(entity: Any) -> str:
@@ -89,6 +92,8 @@ def to_ref(entity: Any) -> str:
         return COMPONENT_PREFIX + entity.name
     if kind.endswith("Parameter"):
         return PARAM_PREFIX + entity.name
+    if kind == "TimelineGroup":
+        return TIMELINE_PREFIX + entity.name
     raise BridgeError(
         ErrorCode.INTERNAL, f"{kind} has neither an entityToken nor a name path", {"type": kind}
     )
@@ -130,7 +135,51 @@ def resolve(design: Any, ref: Any, component: Any = None) -> Any:
     return entity
 
 
+def _parent_group(item: Any) -> Any:
+    try:
+        return getattr(item, "parentGroup", None)
+    except Exception:
+        return None
+
+
+def walk_timeline(timeline: Any) -> list[Any]:
+    """Timeline items in order; the members of a group follow the group right after it.
+
+    Works whether ``Timeline.item`` lists group members at the top level (they are
+    skipped there, ``parentGroup`` is set) or only inside their group.
+    """
+    found: list[Any] = []
+    for index in range(timeline.count):
+        item = timeline.item(index)
+        if _parent_group(item) is not None:
+            continue
+        found.append(item)
+        if getattr(item, "isGroup", False):
+            found.extend(item.item(j) for j in range(item.count))
+    return found
+
+
+def _timeline_lookup(design: Any, ref: str) -> Any:
+    """``timeline:<name>`` -> the ``TimelineObject`` with that name (top level or in a group)."""
+    name = ref[len(TIMELINE_PREFIX) :]
+    matches = [item for item in walk_timeline(design.timeline) if item.name == name]
+    if len(matches) > 1:
+        candidates = []
+        for item in matches:
+            entity = None if getattr(item, "isGroup", False) else getattr(item, "entity", None)
+            kind = "TimelineGroup" if entity is None else type_name(entity)
+            candidates.append({"index": item.index, "type": kind})
+        raise BridgeError(
+            ErrorCode.INVALID_PARAMS,
+            f"{len(matches)} timeline items are named {name!r}: use the entity ref instead",
+            {"ref": ref, "candidates": candidates},
+        )
+    return matches[0] if matches else None
+
+
 def _lookup(design: Any, ref: str) -> Any:
+    if ref.startswith(TIMELINE_PREFIX):
+        return _timeline_lookup(design, ref)
     if ref.startswith(PARAM_PREFIX):
         return design.allParameters.itemByName(ref[len(PARAM_PREFIX) :])
     if ref.startswith(COMPONENT_PREFIX):

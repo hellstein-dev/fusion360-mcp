@@ -76,6 +76,9 @@ class FakeDesign(adsk.fusion.Design):
         )
         self.parentDocument = FakeEntity("adsk::core::Document", name)
         self._active_component: Any = None
+        self.compute_calls = 0
+        # Called by ``computeAll`` (lets a test make a recompute reveal an error).
+        self.on_compute: Any = None
 
     @property
     def activeComponent(self) -> Any:
@@ -93,6 +96,12 @@ class FakeDesign(adsk.fusion.Design):
         if not self.parametric:
             raise RuntimeError("direct designs have no timeline")
         return self._timeline
+
+    def computeAll(self) -> bool:
+        self.compute_calls += 1
+        if self.on_compute is not None:
+            self.on_compute(self)
+        return True
 
     def add_entity(self, entity: Any) -> Any:
         if entity.entityToken:
