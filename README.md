@@ -395,6 +395,69 @@ Materials, appearances and file exchange:
   `mesh_bodies`. An import that produces nothing fails, and in a parametric design its
   timeline items are rolled back. In a direct design, the created objects are deleted.
 
+## Листовой металл
+
+Sheet metal rules, flanges, bends and the flat pattern:
+
+| Tool | What it does |
+|------|--------------|
+| `sheet_metal_capabilities` | Which sheet metal operations this Fusion API supports (no changes); `sketch_bend` is always `false` |
+| `sheet_metal_list_rules` | Design and library rules: thickness, bend radius, gap, relief sizes in mm with expressions, K-factor, relief shape |
+| `sheet_metal_create_rule` | Design rule copied from a base rule (default: the library default) with new values |
+| `sheet_metal_assign_rule` | Active rule of a component; a library rule is copied into the design first |
+| `sheet_metal_convert` | Solid plate body to sheet metal from a planar base face |
+| `sheet_metal_base_flange` | Flat sheet metal body from closed profiles |
+| `sheet_metal_contour_flange` | Bent body from an open profile (sketch curves / edges), one side, symmetric or two sides |
+| `sheet_metal_edge_flange` | Wall on linear edges: height or to-entity, angle, width (full / symmetric / two sided / two offsets), height datum, bend position, mitered corners, flip, bend radius |
+| `sheet_metal_list_bends` | Inner / outer bend face pairs with the radius in mm |
+| `sheet_metal_unfold` / `sheet_metal_refold` | Unfold all or selected bends about a stationary face; refold an unfold feature |
+| `sheet_metal_create_flat_pattern` / `get` / `delete` | The component's flat pattern: size, thickness, bend count, bend angles and directions |
+| `sheet_metal_export_flat_pattern` | Flat pattern to DXF (bend / extent lines, file units, splines to polylines) or STEP |
+
+Fusion API coverage:
+
+| Area | API | Status |
+|------|-----|--------|
+| Rules, active rule, `isSheetMetal` | `SheetMetalRules`, `Component.activeSheetMetalRule`, `BRepBody.isSheetMetal` | stable |
+| Flat pattern and DXF export | `Component.createFlatPattern`, `FlatPattern`, `createDXFFlatPatternExportOptions` | stable |
+| STEP export of the flat pattern | `createSTEPExportOptionsForFlatPattern` | preview |
+| Convert | `BRepBody.convertToSheetMetal` | preview |
+| Base / contour / edge flange | `FlangeFeatures.create*FlangeInput` | preview |
+| Bends, unfold, refold | `BRepBody.getBendFaces`, `UnfoldFeatures`, `RefoldFeatures` | preview |
+| Bend along a sketch line | — | **none** |
+
+- **Check `sheet_metal_capabilities` first.** A tool built on a missing preview API fails
+  with `FUSION_API_ERROR` and `details = {"reason": "api_unavailable", "api": "<name>"}`
+  before it changes anything. Without the flange API a bracket needs the Fusion UI or
+  `execute_python`.
+- **No Bend along a sketch line.** The Fusion API has no object for it (`sketch_bend` is
+  always `false`). Model a bend with `sheet_metal_edge_flange`, or draw it into the open
+  profile of `sheet_metal_contour_flange`.
+- **Rules.** A rule is addressed by its name and `source` (`design`, `library`, `all` -
+  design first). Numbers are in `units` (default mm); strings are expressions that may use
+  `Thickness` (`"Thickness * 1.5"`). Write units in expressions (`"2 mm"`): a rule in inches
+  reads bare numbers as inches. Library rules are never changed. A failed call deletes the
+  rule it created and restores the previous active rule. Fusion may refuse a rule on a
+  component without sheet metal data; then pass `rule` to the first flange tool.
+- **Refs change after every flange.** Take edges and faces from the latest result or query
+  them again with `inspect_query`.
+- **Flat pattern.** One per component, addressed by the component (default: root).
+  `sheet_metal_create_flat_pattern` refuses an existing one unless `replace=true`, and
+  switches Fusion back to the design workspace afterwards. Export paths follow the export
+  rules above (absolute, `.dxf` / `.step` / `.stp`, `overwrite`).
+
+Bracket recipe:
+
+1. `sheet_metal_capabilities` - check `contour_flange`, `edge_flange`, `flat_pattern`.
+2. `sheet_metal_create_rule(name="Steel 2mm", thickness=2, bend_radius="Thickness * 1",
+   k_factor=0.44)`.
+3. `sketch_create(plane="origin:XY")`, then `sketch_draw` with two lines forming an open L.
+4. `sheet_metal_contour_flange(profiles=[<line a>, <line b>], distance=50, rule="Steel 2mm")`.
+5. `inspect_query(kind="edge", scope=[<body>])` -> `sheet_metal_edge_flange(edges=[<outer
+   edge>], height=20)`.
+6. `sheet_metal_create_flat_pattern(stationary_face=<planar face>)` ->
+   `sheet_metal_export_flat_pattern(path="C:/out/bracket.dxf")`.
+
 ## Limitations
 
 - **Timeouts.** Every request has a timeout (`execute_python` takes `timeout_s`, default
