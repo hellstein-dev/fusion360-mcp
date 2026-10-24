@@ -155,6 +155,21 @@ class OffsetTypes:
     RoundedOffsetType = 1
 
 
+class MeshRefinementSettings:
+    MeshRefinementHigh = 0
+    MeshRefinementMedium = 1
+    MeshRefinementLow = 2
+    MeshRefinementCustom = 3
+
+
+class MeshUnits:
+    CentimeterMeshUnit = 0
+    MillimeterMeshUnit = 1
+    MeterMeshUnit = 2
+    InchMeshUnit = 3
+    FootMeshUnit = 4
+
+
 # --- extent and start definitions -------------------------------------------------------------
 
 

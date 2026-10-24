@@ -624,6 +624,7 @@ class FakeComponent:
         self.name = name
         self.entityToken = token or _token(f"component-{name}-")
         self.material: Any = None
+        self.meshBodies: Any = None  # c12 fakes install ``FakeMeshBodies``
         self.bRepBodies = FakeCollection()
         self.sketches = FakeSketches(self)
         self.constructionPlanes = FakeCollection()
