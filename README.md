@@ -205,6 +205,64 @@ feature_hole(placement={"type": "point", "face": <top face>, "point": [0, 0, 20]
              diameter=4.2, extent={"type": "through_all"}, thread={"designation": "M5x0.8"})
 ```
 
+## Body operations & patterns
+
+The `pattern_*` and `body_*` tools copy, combine and reshape bodies. Most of them add one
+parametric timeline feature per call:
+
+| Tool | What it does |
+|------|--------------|
+| `pattern_rectangular` | Copy features, bodies, faces or occurrences along one or two directions (quantity, spacing or extent, symmetric) |
+| `pattern_circular` | Copy them around an axis, including the axis of a cylindrical or conical face (quantity, total angle, symmetric) |
+| `pattern_path` | Copy them along a path of sketch curves or edges (start share, flip, orientation along the path) |
+| `pattern_mirror` | Mirror across a planar face, construction plane or origin plane. `combine` joins mirrored bodies with their originals |
+| `body_combine` | Join, cut or intersect tool bodies with a target body (keep tools, new component) |
+| `body_split` / `body_split_face` | Split bodies, or faces of a body, with a plane, face, body (or sketch curve for faces) |
+| `body_move` | Move bodies, or copies of them (`keep_original`): translate, along an entity, rotate, rotate about a free axis, point to point, rigid 4x4 matrix |
+| `body_scale` | Scale about a point (default `origin:O`), uniformly or per axis |
+| `body_thicken` | Thicken faces of a surface into a solid |
+| `body_boundary_fill` | Make solids from the closed cells that bodies, faces and planes enclose |
+| `body_delete_faces` / `body_replace_face` | Delete faces and let Fusion heal the body, or replace faces with a face, plane or surface body |
+| `body_rename` / `body_set_visibility` / `body_remove` | Rename, show or hide and set opacity, remove (a Remove feature) or delete bodies |
+
+- **Units.** Lengths and the `translate` / `rotate_about` point and the matrix translation
+  are in the tool's `units` (default mm). Angles are in degrees. Quantities, the path
+  `start` share (0..1) and scale factors are unitless numbers. Strings are Fusion
+  expressions, except in `rotate_about` and `matrix`, which take plain numbers.
+- **Input refs.** `entities` of a pattern must all be one kind: feature refs from earlier
+  `feature_*` results, body or face refs (c03 `inspect_query`), or occurrence refs.
+  Fusion patterns one kind at a time, and a mix fails with `details.kinds`. Directions,
+  axes, planes and points come from `origin:X|Y|Z|XY|XZ|YZ|O`, from the c06
+  `construction_*` tools, or from edges, faces and vertices of `inspect_query`. The
+  `compute` option (`adjust`, `optimized`, `identical`) only applies to feature input.
+  Boundary fill cells are never picked by index. You pick them with `cell_points`; a point
+  in no cell fails, and `details.cells` lists every cell's centre and volume.
+- **Result.** Feature tools return the same result as the `feature_*` tools: `feature`,
+  `health`, `created_bodies`, `modified_bodies` and `removed_bodies` (tokens of consumed
+  bodies). On top of that:
+  - occurrence patterns add `created_occurrences`;
+  - `body_split_face` adds the new `faces`;
+  - `body_move` with `keep_original` adds `copy`.
+
+  Body tokens change after patterns and combines, so take the refs from the latest result.
+  `body_rename`, `body_set_visibility` and `body_remove` return the body refs, the
+  visibility state, and the removed refs with `mode_used`.
+- **Atomicity.** Bad input fails with `INVALID_PARAMS` before anything changes. A feature
+  computed in the error state is rolled back. A copy made for a failed `body_move` is
+  removed too. `body_set_visibility` restores every body's previous values if Fusion
+  refuses one. `body_remove` in a direct design always deletes the bodies, and Fusion
+  cannot undo those deletions.
+
+Example: a symmetric part from overlapping blocks:
+
+```text
+feature_extrude(<20 x 20 mm square>, 10 mm) -> created_bodies[0] = cube
+pattern_rectangular(entities=[cube], direction1="origin:X", quantity1=3, distance1=15,
+                    direction2="origin:Y", quantity2=2, distance2=15)
+pattern_mirror(entities=<all bodies>, plane="origin:YZ")
+body_combine(target=cube, tools=<the other bodies>)
+```
+
 ## Limitations
 
 - **Timeouts.** Every request has a timeout (`execute_python` takes `timeout_s`, default
