@@ -258,7 +258,7 @@ def check_k_factor(value: Any) -> float:
     return float(value)
 
 
-def _delete(entity: Any) -> None:
+def delete_entity(entity: Any) -> None:
     if entity.deleteMe() is False:
         raise RuntimeError("deleteMe returned False")
 
@@ -286,15 +286,16 @@ def apply_rule(
                     ErrorCode.FUSION_API_ERROR, f"Fusion could not copy rule {name!r}"
                 )
             copy = rule
-            comp.add(lambda: _delete(copy), f"delete rule copy {copy.name!r}")
+            comp.add(lambda: delete_entity(copy), f"delete rule copy {copy.name!r}")
             copied = True
     previous = _get(component, "activeSheetMetalRule")
     previous_name = _get(previous, "name") if previous is not None else None
     if previous is None or not same_entity(previous, rule):
 
         def restore() -> None:
-            if previous is not None:
-                component.activeSheetMetalRule = previous
+            # ``None`` too: a component without sheet metal data had no rule; if Fusion
+            # refuses that, the failure is reported in ``compensation_errors``.
+            component.activeSheetMetalRule = previous
 
         comp.add(restore, "restore active sheet metal rule")
         component.activeSheetMetalRule = rule
