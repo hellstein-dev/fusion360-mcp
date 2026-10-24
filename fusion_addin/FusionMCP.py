@@ -58,6 +58,16 @@ from .core.version import ADDIN_VERSION  # noqa: E402
 EVENT_ID = "FusionMCP.BridgeJob"
 
 
+def _log(text: str, home: Path | None = None) -> None:
+    """Append a line to ``~/.fusion-mcp/addin.log``; never raises (diagnostics only)."""
+    with contextlib.suppress(Exception):
+        path = (home if home is not None else Path.home()) / ".fusion-mcp" / "addin.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(UTC).isoformat(timespec="milliseconds")
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(f"{stamp} {text}\n")
+
+
 class _JobEventHandler(adsk.core.CustomEventHandler):
     """Main thread: run the next queued bridge job."""
 
@@ -68,9 +78,12 @@ class _JobEventHandler(adsk.core.CustomEventHandler):
     def notify(self, args: Any) -> None:
         server = self._bridge.server
         if server is None:
+            _log("notify: no server", self._bridge.home)
             return
-        with contextlib.suppress(Exception):
+        try:
             server.process_next(getattr(args, "additionalInfo", None))
+        except Exception:
+            _log("notify failed:\n" + traceback.format_exc(), self._bridge.home)
 
 
 class Bridge:
@@ -92,6 +105,10 @@ class Bridge:
         self._handler: _JobEventHandler | None = None
 
     @property
+    def home(self) -> Path | None:
+        return self._home
+
+    @property
     def running(self) -> bool:
         return self.server is not None and self.server.running
 
@@ -105,7 +122,8 @@ class Bridge:
         token = secrets.token_hex(16)
         self._event = self.app.registerCustomEvent(EVENT_ID)
         self._handler = _JobEventHandler(self)
-        self._event.add(self._handler)
+        added = self._event.add(self._handler)
+        _log(f"start: event={self._event is not None} handler_added={added}", self._home)
         try:
             dispatcher = Dispatcher(token, self._registry, lambda params: Context(self.app, params))
             self.server = BridgeServer(token, dispatcher.dispatch, self._fire, self._port)
@@ -126,6 +144,7 @@ class Bridge:
         return port
 
     def _fire(self, job_id: str) -> None:
+        # The return value is not checked: Fusion returns False even when it queues the event.
         self.app.fireCustomEvent(EVENT_ID, job_id)
 
     def stop(self) -> None:

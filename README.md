@@ -20,6 +20,9 @@ The add-in publishes its port and token in `~/.fusion-mcp/bridge.json` while it 
 
 ## Install the add-in
 
+Step-by-step guide for any machine, including manual install and troubleshooting:
+[INSTALL.md](INSTALL.md).
+
 From this directory (`mcp-plugin/`):
 
 ```sh
