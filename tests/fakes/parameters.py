@@ -351,16 +351,87 @@ DISTANCE_UNIT_NAMES = {
 }
 
 
+LENGTH_UNITS = frozenset({"mm", "cm", "m", "in", "ft", "um", "yd", "mil"})
+ANGLE_UNITS = frozenset({"deg", "rad"})
+
+
+def unit_kind(unit: str) -> str:
+    """``"length"``, ``"angle"`` or ``""`` (unitless or unknown)."""
+    unit = unit.strip().lower()
+    if unit in LENGTH_UNITS:
+        return "length"
+    if unit in ANGLE_UNITS:
+        return "angle"
+    return ""
+
+
 class FakeUnitsManager:
-    """``FusionUnitsManager``: distance display units and ``formatInternalValue``."""
+    """``FusionUnitsManager``: distance display units, ``formatInternalValue``,
+    ``isValidExpression`` and ``evaluateExpression`` (c05 D2).
+
+    Expressions are evaluated against ``params`` (set by ``attach_parameters``; an empty set
+    otherwise): numbers with units (``"25 mm"``, ``"30 deg"``), parameter names and
+    arithmetic. A bare number is read in the requested ``units``. An expression whose units
+    (or whose parameters' units) are lengths where an angle is asked for, or the reverse,
+    is invalid, like in Fusion.
+    """
 
     objectType = "adsk::fusion::FusionUnitsManager"
 
-    def __init__(self) -> None:
+    def __init__(self, params: FakeParameterSet | None = None) -> None:
         self._distance = adsk.fusion.DistanceUnits.MillimeterDistanceUnits
         # Units whose formatting raises, like some compound units in Fusion.
         self.unformattable: set[str] = set()
         self.fail_set_units = False
+        self.params = params if params is not None else FakeParameterSet()
+        self.expression_calls: list[tuple[str, str, str]] = []
+
+    def _units(self, units: str) -> str:
+        if not units:
+            return ""
+        if units == "DefaultDistance":
+            return self.defaultLengthUnits
+        if units == "DefaultAngle":
+            return "deg"
+        return units
+
+    def _check_kind(self, expression: str, units: str) -> None:
+        target = unit_kind(units)
+        found: set[str] = set()
+        for word in _WORD.findall(_NUMBER_THEN_WORD.sub(r"\1*\2", expression)):
+            if word.lower() in UNIT_SCALE:
+                found.add(unit_kind(word))
+            else:
+                param = self.params.get(word)
+                if param is not None:
+                    found.add(unit_kind(param.unit))
+        found.discard("")
+        if found and found != {target}:
+            raise RuntimeError(f"expression {expression!r} is not in {units or 'no'} units")
+
+    def evaluateExpression(self, expression: str, units: str = "DefaultDistance") -> float:
+        """Value of ``expression`` in internal units (cm, radians); raises if invalid."""
+        unit = self._units(units)
+        self.expression_calls.append(("evaluate", expression, units))
+        if not isinstance(expression, str) or not expression.strip():
+            raise RuntimeError("empty expression")
+        self._check_kind(expression, unit)
+        return self.params.evaluate(expression, unit)
+
+    def isValidExpression(self, expression: str, units: str) -> bool:
+        self.expression_calls.append(("validate", expression, units))
+        try:
+            unit = self._units(units)
+            if not isinstance(expression, str) or not expression.strip():
+                return False
+            self._check_kind(expression, unit)
+            self.params.evaluate(expression, unit)
+        except Exception:
+            return False
+        return True
+
+    def convert(self, valueInInputUnits: float, inputUnits: str, outputUnits: str) -> float:
+        return valueInInputUnits * unit_scale(inputUnits) / unit_scale(outputUnits)
 
     @property
     def distanceDisplayUnits(self) -> int:
@@ -387,7 +458,7 @@ class FakeUnitsManager:
 def attach_parameters(design: Any) -> FakeParameterSet:
     """Give a ``FakeDesign`` user/model parameters and a units manager; return the set."""
     params = FakeParameterSet()
-    manager = FakeUnitsManager()
+    manager = FakeUnitsManager(params)
     design.parameter_set = params
     design.userParameters = FakeUserParameters(params)
     design.allParameters = FakeAllParameters(params)

@@ -37,6 +37,17 @@ class CalculationAccuracy:
     VeryHighCalculationAccuracy = 3
 
 
+class DimensionOrientations:
+    AlignedDimensionOrientation = 0
+    HorizontalDimensionOrientation = 1
+    VerticalDimensionOrientation = 2
+
+
+class PatternDistanceType:
+    ExtentPatternDistanceType = 0
+    SpacingPatternDistanceType = 1
+
+
 class FeatureHealthStates:
     HealthyFeatureHealthState = 0
     WarningFeatureHealthState = 1

@@ -13,6 +13,7 @@ from typing import Any
 import fusion_addin
 
 from .design import FakeCollection, FakeDesign
+from .fusion_sketch import FakeProfileCollection, FakeSketches, SketchApiMixin
 
 adsk = fusion_addin.adsk
 P = adsk.core.Point3D.create
@@ -430,11 +431,14 @@ class FakeConstructionPoint:
             setattr(self, key, value)
 
 
-class FakeProfiles(FakeCollection):
-    pass
+FakeProfiles = FakeProfileCollection
 
 
-class FakeSketch:
+class FakeSketch(SketchApiMixin):
+    """The one sketch fake: c03 identity/plane fields plus the c05 sketch API
+    (``SketchApiMixin``, tests/fakes/fusion_sketch.py). ``profile_count`` creates that many
+    empty placeholder profiles; the transform comes from ``reference_plane`` unless given."""
+
     objectType = "adsk::fusion::Sketch"
 
     def __init__(
@@ -444,12 +448,22 @@ class FakeSketch:
         reference_plane: Any = None,
         is_visible: bool = True,
         token: str | None = None,
+        *,
+        transform: Any = None,
+        component: Any = None,
+        design: Any = None,
     ) -> None:
         self.name = name
-        self.profiles = FakeProfiles([object() for _ in range(profile_count)])
         self.referencePlane = reference_plane
         self.isVisible = is_visible
         self.entityToken = token or _token("sketch-")
+        self._init_sketch_api(
+            reference_plane=reference_plane,
+            transform=transform,
+            component=component,
+            design=design,
+            profile_count=profile_count,
+        )
 
 
 class FakeTimelineRef:
@@ -599,7 +613,7 @@ class FakeComponent:
         self.name = name
         self.entityToken = token or _token(f"component-{name}-")
         self.bRepBodies = FakeCollection()
-        self.sketches = FakeCollection()
+        self.sketches = FakeSketches(self)
         self.constructionPlanes = FakeCollection()
         self.constructionAxes = FakeCollection()
         self.constructionPoints = FakeCollection()
@@ -673,6 +687,7 @@ def fake_part_design(*bodies: FakeBody, parametric: bool = True) -> FakeDesign:
     every body, face, edge, vertex and origin element is findable by token."""
     design = FakeDesign(parametric=parametric)
     root = FakeComponent("root")
+    root.sketches.design = design
     design.rootComponent = root
     design.allComponents = FakeCollection([root])
     for element in root.origin_elements().values():
