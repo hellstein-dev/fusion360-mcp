@@ -114,6 +114,47 @@ class RuleFilletTopologyTypes:
     BetweenFacesRuleFilletTopologyType = 1
 
 
+# Surface features (c11 D2).
+class SurfaceContinuityTypes:
+    ConnectedSurfaceContinuityType = 0
+    TangentSurfaceContinuityType = 1
+    CurvatureSurfaceContinuityType = 2
+
+
+class SurfaceExtendTypes:
+    NaturalSurfaceExtendType = 0
+    TangentSurfaceExtendType = 1
+    PerpendicularSurfaceExtendType = 2
+
+
+class SurfaceExtendAlignment:
+    FreeEdges = 0
+    AlignEdges = 1
+
+
+class UntrimLoopTypes:
+    AllLoopsUntrimType = 0
+    ExternalLoopsUntrimType = 1
+    InternalLoopsUntrimType = 2
+    ManualLoopsUntrimType = 3
+
+
+class RuledSurfaceTypes:
+    NormalRuledSurfaceType = 0
+    TangentRuledSurfaceType = 1
+    DirectionRuledSurfaceType = 2
+
+
+class RuledSurfaceCornerTypes:
+    RoundedRuledSurfaceCornerType = 0
+    MiteredRuledSurfaceCornerType = 1
+
+
+class OffsetTypes:
+    SharpOffsetType = 0
+    RoundedOffsetType = 1
+
+
 # --- extent and start definitions -------------------------------------------------------------
 
 
