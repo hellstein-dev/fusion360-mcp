@@ -123,6 +123,21 @@ def face(normal: Sequence[float]) -> str:
     return token(found[0])
 
 
+def highest_face(normal: Sequence[float] = (0, 0, 1)) -> str:
+    """The planar face facing ``normal`` that lies highest along it (the top of a housing
+    whose counterbore floors also face +Z)."""
+    found = faces(surface_type="plane", normal=list(normal))
+    assert found, "no planar face facing the normal"
+
+    def height(item: dict[str, Any]) -> float:
+        return sum(c * n for c, n in zip(item["centroid_mm"], normal, strict=True))
+
+    top = max(height(item) for item in found)
+    highest = [item for item in found if abs(height(item) - top) < 1e-6]
+    assert len(highest) == 1, highest
+    return token(highest[0])
+
+
 def sketch_on(plane: str) -> str:
     return token(call("sketch_create", {"plane": plane})["sketch"])
 
@@ -252,7 +267,8 @@ def test_housing_extrude_fillet_shell_holes_thread(document: dict[str, Any]) -> 
         call(
             "feature_hole",
             {
-                "placement": {"type": "point", "face": face([0, 0, 1]), "point": [0, 0, 20]},
+                # The four counterbore floors face +Z too: take the top face by height.
+                "placement": {"type": "point", "face": highest_face(), "point": [0, 0, 20]},
                 "diameter": 4.2,
                 "extent": {"type": "through_all"},
                 "thread": {"designation": "M5x0.8"},
@@ -268,8 +284,10 @@ def test_housing_extrude_fillet_shell_holes_thread(document: dict[str, Any]) -> 
 
     tree = call("inspect_tree", {})["root"]
     assert all(f["health"] == "ok" for f in tree["features"]), tree["features"]
-    bore = faces(scope=[body], surface_type="cylinder", radius_min_mm=2.0, radius_max_mm=2.2)
-    assert len(bore) == 1, bore
+    # The r 2.1 mm tapped bore; the shelled inner corner fillets (r 5 - 3 = 2 mm) stay out.
+    bore = faces(scope=[body], surface_type="cylinder", radius_min_mm=2.05, radius_max_mm=2.15)
+    assert len(bore) == 1, [{k: v for k, v in f.items() if k != "ref"} for f in bore]
+    assert bore[0]["centroid_mm"][:2] == pytest.approx([0, 0], abs=1e-6)
 
 
 # --- 13.2: one feature per body --------------------------------------------------------------

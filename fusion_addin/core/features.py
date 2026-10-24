@@ -602,10 +602,16 @@ def target_component(entity: Any) -> Any:
 
 
 def _ref_object(ctx: Any, entity: Any) -> dict[str, Any]:
+    """``{ref, type, name}``; a body also gets ``is_solid`` (``BRepBody.isSolid``: false for a
+    surface body), so surface tools' results tell sheets from solids (c15 4.1)."""
     data: dict[str, Any] = {"ref": ctx.refs.to_ref(entity), "type": type_name(entity)}
     name = _attr(entity, "name")
     if isinstance(name, str):
         data["name"] = name
+    if data["type"] == BODY:
+        solid = _attr(entity, "isSolid")
+        if isinstance(solid, bool):
+            data["is_solid"] = solid
     return data
 
 

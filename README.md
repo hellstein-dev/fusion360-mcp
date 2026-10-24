@@ -185,7 +185,7 @@ feature per call:
   in the current Fusion API.
 - **Result.** Every feature tool returns `{"feature": {ref, type, name}, "health": {"state":
   ok|warning|error|unknown, "message"}, "created_bodies", "modified_bodies",
-  "removed_bodies"}`, plus `component` for `new_component`, `holes` (the count) and
+  "removed_bodies"}` (body items are `{ref, type, name, is_solid}`), plus `component` for `new_component`, `holes` (the count) and
   `thread` for `feature_hole`, and `thread` for `feature_thread`. Body geometry is not
   repeated, so measure it with the `inspect_*` tools.
 - **Health and rollback.** Bad input (a missing field for the chosen mode, a wrong entity

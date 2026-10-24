@@ -474,11 +474,33 @@ def test_target_component_unknown() -> None:
 
 
 def _ref(entity: Any) -> dict[str, Any]:
-    return {
+    data = {
         "ref": entity.entityToken,
         "type": entity.objectType.rsplit("::", 1)[-1],
         "name": entity.name,
     }
+    if data["type"] == "BRepBody":
+        data["is_solid"] = entity.isSolid  # c15 4.1
+    return data
+
+
+def test_result_bodies_carry_is_solid() -> None:
+    """``created_bodies`` / ``modified_bodies`` items tell a surface body from a solid
+    (c15 4.1: the surface smoke tests read ``is_solid``)."""
+    design = fake_feature_design()
+    root = design.rootComponent
+    ctx = make_ctx(design)
+    extrudes = root.features.extrudeFeatures
+    before = fx.BodySnapshot.take([root])
+    sheet = FakeBody("Sheet")
+    sheet.isSolid = False
+    solid = FakeBody("Solid")
+    feature = extrudes.will_create(sheet, solid).add(
+        extrudes.createInput(None, OPS.NewBodyFeatureOperation)
+    )
+    created = fx.feature_result(ctx, feature, before)["created_bodies"]
+    assert [(b["name"], b["is_solid"]) for b in created] == [("Sheet", False), ("Solid", True)]
+    assert "is_solid" not in fx.feature_result(ctx, feature, before)["feature"]
 
 
 def test_snapshot_takes_unique_components() -> None:
