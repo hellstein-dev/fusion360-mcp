@@ -22,7 +22,7 @@ from tests.fakes.brep import (
     fake_cylinder_face,
 )
 from tests.fakes.construction import fake_construction_design, install_construction
-from tests.fakes.design import FakeApp
+from tests.fakes.design import FakeApp, FakeEntity
 
 adsk = fusion_addin.adsk
 HEALTH = adsk.fusion.FeatureHealthStates
@@ -375,3 +375,87 @@ def test_three_points_kind_error_names_the_index() -> None:
     err = error(h.construction_plane, design, params)
     assert err.details == {"param": "points[1]", "expected": "point", "got": "ConstructionAxis"}
     assert design.rootComponent.constructionPlanes.inputs == []
+
+
+# --- 3.4 tangent, tangent_at_point, along_path -----------------------------------------------
+
+
+def cylinder_design() -> tuple[Any, Any]:
+    design = fake_construction_design()
+    cylinder = design.add_entity(fake_cylinder_face(0.5, 3, token="cyl"))
+    return design, cylinder
+
+
+def test_tangent_with_angle() -> None:
+    design, cylinder = cylinder_design()
+    root = design.rootComponent
+    run(
+        h.construction_plane,
+        design,
+        {"method": "tangent", "face": "cyl", "angle": 90, "plane": "origin:XZ"},
+    )
+    name, (got_face, value, plane) = setter_call(root.constructionPlanes)
+    assert name == "setByTangent"
+    assert got_face is cylinder and plane is root.xZConstructionPlane
+    assert (value.kind, value.value) == ("real", pytest.approx(math.pi / 2))
+
+
+def test_tangent_angle_defaults_to_zero() -> None:
+    design, _ = cylinder_design()
+    run(h.construction_plane, design, {"method": "tangent", "face": "cyl", "plane": "origin:XZ"})
+    value = setter_call(design.rootComponent.constructionPlanes)[1][1]
+    assert (value.kind, value.value) == ("real", 0.0)
+
+
+def test_tangent_needs_cylindrical_or_conical_face() -> None:
+    design, box = box_design()
+    err = error(
+        h.construction_plane,
+        design,
+        {"method": "tangent", "face": face(box, "+z").entityToken, "plane": "origin:XY"},
+    )
+    assert err.details == {"param": "face", "expected": "tangent_face", "got": "BRepFace (plane)"}
+
+
+def test_tangent_at_point() -> None:
+    design, cylinder = cylinder_design()
+    root = design.rootComponent
+    run(
+        h.construction_plane,
+        design,
+        {"method": "tangent_at_point", "face": "cyl", "point": "origin:O"},
+    )
+    name, args = setter_call(root.constructionPlanes)
+    assert name == "setByTangentAtPoint"
+    assert args == (cylinder, root.originConstructionPoint)
+
+
+def test_along_path_passes_the_proportion_as_a_real() -> None:
+    design, box = box_design()
+    edge = box.edges.item(0)
+    run(
+        h.construction_plane,
+        design,
+        {"method": "along_path", "path": edge.entityToken, "proportion": 0.5},
+    )
+    name, (path, value) = setter_call(design.rootComponent.constructionPlanes)
+    assert name == "setByDistanceOnPath"
+    assert path is edge
+    assert (value.kind, value.value) == ("real", 0.5)
+
+
+def test_along_path_accepts_a_sketch_curve_and_rejects_a_face() -> None:
+    design, box = box_design()
+    line = design.add_entity(FakeEntity("adsk::fusion::SketchLine", token="line-1"))
+    run(h.construction_plane, design, {"method": "along_path", "path": "line-1", "proportion": 1})
+    assert setter_call(design.rootComponent.constructionPlanes)[1][0] is line
+    err = error(
+        h.construction_plane,
+        design,
+        {"method": "along_path", "path": face(box, "+z").entityToken, "proportion": 0.5},
+    )
+    assert err.details["param"] == "path" and err.details["expected"] == "path"
+    err = error(
+        h.construction_plane, design, {"method": "along_path", "path": "line-1", "proportion": 2}
+    )
+    assert err.code is ErrorCode.INVALID_PARAMS and err.details["param"] == "proportion"
