@@ -3,6 +3,7 @@ changes, rollback and the fake ref resolver."""
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import pytest
@@ -17,9 +18,12 @@ from tests.fakes.brep import FakeBody, FakeComponent, fake_box_body
 from tests.fakes.design import FakeApp
 from tests.fakes.fusion_features import (
     FEATURE_COLLECTIONS,
+    THREAD_TABLE,
     FakeFeatureCollection,
     FakeFeatureInput,
     FakeRefs,
+    FakeThreadDataQuery,
+    cylinder_face,
     fake_feature_design,
     install_features,
     make_ctx,
@@ -272,3 +276,48 @@ def test_loft_input_has_sections_and_guides() -> None:
     assert inp.sets == {}
     other = component.features.extrudeFeatures.createInput("p", OPS.NewBodyFeatureOperation)
     assert "loftSections" not in other.attrs
+
+
+def test_will_set_applies_to_the_next_feature_only() -> None:
+    holes = install_features(FakeComponent()).features.holeFeatures
+    holes.will_set(sideFaces=["f1", "f2"])
+    first = holes.add(holes.createSimpleInput("d"))
+    assert first.sideFaces == ["f1", "f2"]
+    second = holes.add(holes.createSimpleInput("d"))
+    assert not hasattr(second, "sideFaces")
+
+
+def test_thread_data_query() -> None:
+    component = install_features(FakeComponent())
+    query = component.features.threadFeatures.threadDataQuery
+    assert isinstance(query, FakeThreadDataQuery)
+    assert query.allThreadTypes == list(THREAD_TABLE)
+    assert query.allSizes("ISO Metric profile") == ["5", "6", "8", "10"]
+    assert query.allSizes("Whitworth") == []
+    assert query.allDesignations("ISO Metric profile", "6") == ["M6x1", "M6x0.75"]
+    assert query.allClasses(True, "ISO Metric profile", "M6x1") == ["6H", "4H", "5H"]
+    assert query.allClasses(False, "ISO Metric profile", "M6x1") == ["6g", "4g6g", "6e"]
+    assert query.allClasses(True, "ISO Metric profile", "M99x9") == []
+    assert query.recommendThreadData(1.0, False, "ISO Metric profile") == (True, "M10x1.5", "6g")
+    assert query.recommendThreadData(0.5, True, "ISO Metric profile") == (True, "M6x1", "6H")
+    assert query.recommendThreadData(5.0, True, "ISO Metric profile") == (False, "", "")
+    assert query.calls[0] == ("allThreadTypes", ())
+    assert query.calls[-1] == ("recommendThreadData", (5.0, True, "ISO Metric profile"))
+    omitted = install_features(FakeComponent(), omit=("threadFeatures",))
+    assert not hasattr(omitted.features, "threadFeatures")
+
+
+def test_cylinder_face_orientation() -> None:
+    body = FakeBody("Shaft")
+    outer = cylinder_face(0.5, 2.0, body=body)
+    inner = cylinder_face(0.5, 2.0, internal=True, axis=(1, 0, 0))
+    assert outer.body is body and list(body.faces) == [outer]
+    assert outer.geometry.radius == 0.5
+    p = outer.pointOnFace
+    assert math.hypot(p.x, p.y) == pytest.approx(0.5) and p.z == pytest.approx(1.0)
+    ok, normal = outer.evaluator.getNormalAtPoint(p)
+    assert ok and normal.dotProduct(adsk.core.Vector3D.create(p.x, p.y, 0)) > 0
+    q = inner.pointOnFace
+    _, inward = inner.evaluator.getNormalAtPoint(q)
+    assert q.x == pytest.approx(1.0)
+    assert inward.dotProduct(adsk.core.Vector3D.create(0, q.y, q.z)) < 0

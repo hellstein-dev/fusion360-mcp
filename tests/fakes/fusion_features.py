@@ -12,7 +12,11 @@ Builds on the c03 fakes (``tests/fakes/brep.py``: ``FakeComponent``, ``FakeBody`
   all of it, including the body changes below.
 - Body changes of the next ``add``: ``will_create(*bodies, component=None)`` (new bodies, in
   ``feature.bodies``), ``will_modify(*bodies)`` (existing bodies, in ``feature.bodies``),
-  ``will_remove(*bodies)`` (bodies consumed by a join/cut, gone from their component).
+  ``will_remove(*bodies)`` (bodies consumed by a join/cut, gone from their component);
+  ``will_set(**attrs)`` sets attributes of the next feature (``sideFaces`` of a hole).
+- ``threadFeatures.threadDataQuery`` is a ``FakeThreadDataQuery`` over ``THREAD_TABLE``;
+  ``cylinder_face(radius, internal=...)`` is a cylindrical face with a point and normal that
+  tell a hole wall from a shaft (D16).
 - ``FakeFeatureInput`` records every attribute set and every method call in order; values
   set are readable back. ``provide(name, value)`` gives it a sub-object or a property value
   without recording it; ``returns[name]`` is what a method call returns (default ``True``);
@@ -35,7 +39,14 @@ import fusion_addin
 from fusion_addin.core.context import Context
 from fusion_addin.core.refs import Refs
 
-from .brep import FakeBody, FakeFeature, register_body
+from .brep import (
+    FakeBody,
+    FakeEvaluator,
+    FakeFeature,
+    add_face,
+    fake_cylinder_face,
+    register_body,
+)
 from .design import FakeApp, FakeCollection, FakeDesign
 from .fusion_sketch import fake_sketch_design
 
@@ -185,6 +196,7 @@ class FakeFeatureCollection(FakeCollection):
         self._created: list[tuple[FakeBody, Any]] = []
         self._modified: list[FakeBody] = []
         self._removed: list[FakeBody] = []
+        self._attrs: dict[str, Any] = {}
 
     def __getattr__(self, name: str) -> Callable[..., FakeFeatureInput]:
         # Only reached for names that are not real attributes: the creation methods.
@@ -220,6 +232,11 @@ class FakeFeatureCollection(FakeCollection):
         self._removed.extend(bodies)
         return self
 
+    def will_set(self, **attrs: Any) -> FakeFeatureCollection:
+        """Attributes of the next added feature (e.g. ``sideFaces`` of a hole)."""
+        self._attrs.update(attrs)
+        return self
+
     # --- add ----------------------------------------------------------------------------------
 
     def add(self, item: Any) -> Any:
@@ -230,6 +247,7 @@ class FakeFeatureCollection(FakeCollection):
         self.added.append(item)
         created, modified, removed = self._created, self._modified, self._removed
         self._created, self._modified, self._removed = [], [], []
+        attrs, self._attrs = self._attrs, {}
 
         feature: Any = FakeFeature(
             self.kind,
@@ -239,6 +257,8 @@ class FakeFeatureCollection(FakeCollection):
             component=self.component,
         )
         feature.input = item
+        for name, value in attrs.items():
+            setattr(feature, name, value)
         new_bodies = [self._place(body, owner) for body, owner in created]
         feature.bodies = FakeCollection([*new_bodies, *modified])
         removed_from = [(body, body.parentComponent) for body in removed]
@@ -317,6 +337,120 @@ class FakePath:
         return [self.curves]
 
 
+# Thread type -> size -> designation -> (major diameter cm, minor diameter cm).
+THREAD_TABLE: dict[str, dict[str, dict[str, tuple[float, float]]]] = {
+    "ISO Metric profile": {
+        "5": {"M5x0.8": (0.5, 0.42), "M5x0.5": (0.5, 0.45)},
+        "6": {"M6x1": (0.6, 0.5), "M6x0.75": (0.6, 0.52)},
+        "8": {"M8x1.25": (0.8, 0.67), "M8x1": (0.8, 0.69)},
+        "10": {"M10x1.5": (1.0, 0.84), "M10x1.25": (1.0, 0.86)},
+    },
+    "ANSI Unified Screw Threads": {
+        "1/4": {"1/4-20 UNC": (0.635, 0.513), "1/4-28 UNF": (0.635, 0.551)},
+    },
+}
+THREAD_CLASSES = {
+    "ISO Metric profile": {True: ["6H", "4H", "5H"], False: ["6g", "4g6g", "6e"]},
+    "ANSI Unified Screw Threads": {True: ["2B", "1B", "3B"], False: ["2A", "1A", "3A"]},
+}
+
+
+class FakeThreadDataQuery:
+    """``ThreadFeatures.threadDataQuery`` over ``THREAD_TABLE`` (or ``table``).
+
+    ``recommendThreadData(d, internal, type)`` picks the designation whose minor (internal,
+    the tap drill of a hole) or major (external, a shaft) diameter is nearest to ``d`` cm,
+    within ``tolerance`` cm, with the first class; ``(False, "", "")`` otherwise. ``calls``
+    records ``(method, args)``.
+    """
+
+    objectType = "adsk::fusion::ThreadDataQuery"
+
+    def __init__(
+        self,
+        table: dict[str, dict[str, dict[str, tuple[float, float]]]] | None = None,
+        classes: dict[str, dict[bool, list[str]]] | None = None,
+        tolerance: float = 0.06,
+    ) -> None:
+        self.table = table if table is not None else THREAD_TABLE
+        self.classes = classes if classes is not None else THREAD_CLASSES
+        self.tolerance = tolerance
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    @property
+    def allThreadTypes(self) -> list[str]:
+        self.calls.append(("allThreadTypes", ()))
+        return list(self.table)
+
+    def allSizes(self, threadType: str) -> list[str]:
+        self.calls.append(("allSizes", (threadType,)))
+        return list(self.table.get(threadType, {}))
+
+    def allDesignations(self, threadType: str, size: str) -> list[str]:
+        self.calls.append(("allDesignations", (threadType, size)))
+        return list(self.table.get(threadType, {}).get(size, {}))
+
+    def _designations(self, threadType: str) -> dict[str, tuple[float, float]]:
+        out: dict[str, tuple[float, float]] = {}
+        for designations in self.table.get(threadType, {}).values():
+            out.update(designations)
+        return out
+
+    def allClasses(self, isInternal: bool, threadType: str, designation: str) -> list[str]:
+        self.calls.append(("allClasses", (isInternal, threadType, designation)))
+        if designation not in self._designations(threadType):
+            return []
+        return list(self.classes.get(threadType, {}).get(bool(isInternal), []))
+
+    def recommendThreadData(
+        self, modelDiameter: float, isInternal: bool, threadType: str
+    ) -> tuple[bool, str, str]:
+        self.calls.append(("recommendThreadData", (modelDiameter, isInternal, threadType)))
+        best: tuple[float, str] | None = None
+        for designation, (major, minor) in self._designations(threadType).items():
+            gap = abs((minor if isInternal else major) - modelDiameter)
+            if gap <= self.tolerance and (best is None or gap < best[0]):
+                best = (gap, designation)
+        if best is None:
+            return False, "", ""
+        classes = self.classes.get(threadType, {}).get(bool(isInternal), [""])
+        return True, best[1], classes[0]
+
+
+def cylinder_face(
+    radius: float,
+    height: float = 1.0,
+    internal: bool = False,
+    origin: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    axis: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    body: Any = None,
+) -> Any:
+    """c03 ``fake_cylinder_face`` (cm) with a point on the face and its normal: pointing away
+    from the axis for an outer (shaft) face, towards it for an ``internal`` (hole) face.
+    Added to ``body`` when given."""
+    face = fake_cylinder_face(radius, height, origin, axis)
+    a = adsk.core.Vector3D.create(*axis)
+    a.normalize()
+    helper = adsk.core.Vector3D.create(1.0, 0.0, 0.0)
+    if abs(a.dotProduct(helper)) > 0.9:
+        helper = adsk.core.Vector3D.create(0.0, 1.0, 0.0)
+    radial = a.crossProduct(helper)
+    radial.normalize()
+    point = adsk.core.Point3D.create(
+        origin[0] + a.x * height / 2 + radial.x * radius,
+        origin[1] + a.y * height / 2 + radial.y * radius,
+        origin[2] + a.z * height / 2 + radial.z * radius,
+    )
+    normal = radial.copy()
+    if internal:
+        normal.scaleBy(-1.0)
+    face.pointOnFace = point
+    face.evaluator = FakeEvaluator(normal)
+    if body is not None:
+        add_face(body, face)
+    return face
+
+
 def _prepare_input(collection: FakeFeatureCollection, method: str, inp: FakeFeatureInput) -> None:
     """Sub-objects a real input has right after creation (not logged as sets)."""
     if collection.kind == "LoftFeature" and method == "createInput":
@@ -342,6 +476,9 @@ class FakeFeatures:
         for attr, (kind, prefix, methods) in FEATURE_COLLECTIONS.items():
             if attr not in skipped:
                 setattr(self, attr, FakeFeatureCollection(component, design, kind, prefix, methods))
+        threads = getattr(self, "threadFeatures", None)
+        if threads is not None:
+            threads.threadDataQuery = FakeThreadDataQuery()
 
     def createPath(self, curves: Any, isChain: bool = True) -> FakePath:
         if self.path_error is not None:

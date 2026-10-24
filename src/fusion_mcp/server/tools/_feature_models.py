@@ -17,6 +17,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from fusion_mcp.protocol.features import DEFAULT_THREAD_TYPE as PROTOCOL_DEFAULT_THREAD_TYPE
 from fusion_mcp.protocol.units import LengthUnit
 from fusion_mcp.server.tools.sketch_schema import XY
 
@@ -34,9 +35,11 @@ ThreadLocation = Literal["high", "low"]
 SweepOrientation = Literal["perpendicular", "parallel"]
 RailScaling = Literal["scale", "stretch", "none"]
 RibThicknessLocation = Literal["symmetric", "side1", "side2"]
+HoleKind = Literal["simple", "counterbore", "countersink"]
 
-DEFAULT_THREAD_TYPE = "ISO Metric profile"
+DEFAULT_THREAD_TYPE = PROTOCOL_DEFAULT_THREAD_TYPE
 DEFAULT_TIP_ANGLE = 118.0
+DEFAULT_CS_ANGLE = 90.0
 
 
 def _value(value: Any) -> Any:
@@ -61,6 +64,11 @@ def _number(value: Any) -> Any:
     if not math.isfinite(value):
         raise ValueError("the number must be finite")
     return value
+
+
+def _zero(value: Any) -> bool:
+    """A plain number equal to 0 (an expression string never counts as zero)."""
+    return isinstance(value, int | float) and not isinstance(value, bool) and value == 0
 
 
 Ref = Annotated[
@@ -330,6 +338,8 @@ class ThreadSpec(_Model):
             raise ValueError("`length` needs full_length=false")
         if not self.full_length and self.length is None:
             raise ValueError("full_length=false needs `length`")
+        if self.full_length and not _zero(self.offset):
+            raise ValueError("`offset` needs full_length=false")
         return self
 
 

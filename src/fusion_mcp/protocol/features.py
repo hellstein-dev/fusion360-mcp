@@ -34,6 +34,13 @@ LOFT_END_CONDITIONS = (
 )
 RIB_THICKNESS_LOCATIONS = ("symmetric", "side1", "side2")
 RIB_DEPTH_TYPES = ("to_next", "distance")
+# Hole (D15) and thread (D16).
+HOLE_KINDS = ("simple", "counterbore", "countersink")
+HOLE_PLACEMENTS = ("point", "sketch_points", "face_offsets", "center")
+HOLE_EXTENT_TYPES = ("distance", "through_all", "to_entity")
+THREAD_LOCATIONS = ("high", "low")
+# Thread type Fusion offers by default for metric threads; designations stay strings.
+DEFAULT_THREAD_TYPE = "ISO Metric profile"
 
 
 def check_choice(name: str, value: Any, choices: Sequence[str]) -> str:

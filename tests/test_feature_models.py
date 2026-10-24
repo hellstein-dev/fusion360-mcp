@@ -43,6 +43,8 @@ def dumped(tp: Any, value: Any) -> Any:
         (m.StartType, vocab.START_TYPES),
         (m.ThinLocation, vocab.THIN_LOCATIONS),
         (m.HealthState, vocab.HEALTH_STATES),
+        (m.HoleKind, vocab.HOLE_KINDS),
+        (m.ThreadLocation, vocab.THREAD_LOCATIONS),
     ],
 )
 def test_literals_match_protocol_tuples(literal: Any, values: tuple[str, ...]) -> None:
@@ -60,6 +62,9 @@ def test_union_tags_match_protocol_tuples() -> None:
 
     assert tags(m.Extent) == vocab.EXTENT_TYPES
     assert tags(m.StartExtent) == vocab.START_TYPES
+    assert tags(m.HolePlacement) == vocab.HOLE_PLACEMENTS
+    assert tags(m.HoleExtent) == vocab.HOLE_EXTENT_TYPES
+    assert m.DEFAULT_THREAD_TYPE == vocab.DEFAULT_THREAD_TYPE
 
 
 @pytest.mark.parametrize("value", [15, -2.5, 0, "wall / 2", "25 mm"])
@@ -359,6 +364,8 @@ def test_thread_spec_defaults_and_dump() -> None:
     [
         {"length": 8},
         {"full_length": False},
+        {"offset": 2},
+        {"offset": "gap"},
         {"location": "middle"},
         {"designation": ""},
         {"thread_type": ""},
