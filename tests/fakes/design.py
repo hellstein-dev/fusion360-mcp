@@ -75,6 +75,18 @@ class FakeDesign(adsk.fusion.Design):
             "adsk::fusion::FusionUnitsManager", defaultLengthUnits="mm"
         )
         self.parentDocument = FakeEntity("adsk::core::Document", name)
+        self._active_component: Any = None
+
+    @property
+    def activeComponent(self) -> Any:
+        """The root component unless another one was activated."""
+        if self._active_component is not None:
+            return self._active_component
+        return self.rootComponent
+
+    @activeComponent.setter
+    def activeComponent(self, component: Any) -> None:
+        self._active_component = component
 
     @property
     def timeline(self) -> FakeTimeline:
