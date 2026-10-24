@@ -438,8 +438,9 @@ def offset(
     if hasattr(constraints, "createOffsetInput") and hasattr(constraints, "addOffset2"):
         offset_input = _call(
             "curves",
+            # A list: the live API takes std::vector<SketchCurve>, not an ObjectCollection.
             lambda: constraints.createOffsetInput(
-                _collection(items), adsk.core.ValueInput.createByString(text)
+                list(items), adsk.core.ValueInput.createByString(text)
             ),
         )
         _call("side_point", _setter(offset_input, "dirPoint", side))
@@ -904,22 +905,19 @@ def rectangular_pattern(
         distance_type = adsk.fusion.PatternDistanceType.SpacingPatternDistanceType
         pattern_input = _call(
             "entities",
-            lambda: constraints.createRectangularPatternInput(_collection(items), distance_type),
+            # A list: the live API takes std::vector<SketchEntity>, not an ObjectCollection.
+            lambda: constraints.createRectangularPatternInput(list(items), distance_type),
         )
         value = adsk.core.ValueInput
-        _call(
-            "count_x",
-            lambda: pattern_input.setDirectionOne(
-                line, value.createByReal(nx), value.createByString(sx)
-            ),
-        )
+        # Properties, not setDirectionOne/Two: live Fusion rejects their null direction entity
+        # (the default: sketch X, then perpendicular), which the docs allow.
+        if line is not None:
+            _call("direction", _setter(pattern_input, "directionOneEntity", line))
+        _call("count_x", _setter(pattern_input, "quantityOne", value.createByReal(nx)))
+        _call("spacing_x", _setter(pattern_input, "distanceOne", value.createByString(sx)))
         if ny > 1:
-            _call(
-                "count_y",
-                lambda: pattern_input.setDirectionTwo(
-                    None, value.createByReal(ny), value.createByString(sy)
-                ),
-            )
+            _call("count_y", _setter(pattern_input, "quantityTwo", value.createByReal(ny)))
+            _call("spacing_y", _setter(pattern_input, "distanceTwo", value.createByString(sy)))
         constraint = journal.created(
             _call("entities", lambda: constraints.addRectangularPattern(pattern_input))
         )
@@ -991,7 +989,9 @@ def circular_pattern(
         if type_name(pivot) not in POINT_TYPES:
             pivot = journal.created(_call("center", lambda: sketch.sketchPoints.add(pivot)))
         pattern_input = _call(
-            "entities", lambda: constraints.createCircularPatternInput(_collection(items), pivot)
+            # A list: the live API takes std::vector<SketchEntity>, not an ObjectCollection.
+            "entities",
+            lambda: constraints.createCircularPatternInput(list(items), pivot),
         )
         value = adsk.core.ValueInput
         _call("count", _setter(pattern_input, "quantity", value.createByReal(n)))

@@ -713,7 +713,7 @@ def test_parametric_offset_constraint() -> None:
     sketch = make_sketch(design)
     gc = sketch.geometricConstraints
     rect = polygon_curves(sketch, [(0, 0), (2, 0), (2, 1), (0, 1)])
-    data = gc.createOffsetInput(OC.createWithArray(rect), VI.createByString("1 mm"))
+    data = gc.createOffsetInput(list(rect), VI.createByString("1 mm"))
     data.dirPoint = P(3, 0.5, 0)
     constraint = gc.addOffset2(data)
     assert constraint.objectType == "adsk::fusion::OffsetConstraint"
@@ -729,6 +729,34 @@ def test_parametric_offset_constraint() -> None:
         "geometricConstraints.createOffsetInput",
         "geometricConstraints.addOffset2",
     ]
+
+
+def test_offset_and_pattern_inputs_reject_object_collection() -> None:
+    """Live Fusion (c15 2.1/2.2): these take ``std::vector`` - a list, not an
+    ``ObjectCollection``."""
+    sketch = make_sketch()
+    gc = sketch.geometricConstraints
+    circle = circle_curve(sketch, (0, 0), 0.2)
+    spacing = adsk.fusion.PatternDistanceType.SpacingPatternDistanceType
+    calls = [
+        ("createOffsetInput", "SketchCurve", lambda c: gc.createOffsetInput(c, VI.createByReal(1))),
+        (
+            "createRectangularPatternInput",
+            "SketchEntity",
+            lambda c: gc.createRectangularPatternInput(c, spacing),
+        ),
+        (
+            "createCircularPatternInput",
+            "SketchEntity",
+            lambda c: gc.createCircularPatternInput(c, sketch.originPoint),
+        ),
+    ]
+    for method, item_type, create in calls:
+        with pytest.raises(
+            TypeError, match=f"{method}', argument 2 of type 'std::vector.*{item_type}"
+        ):
+            create(OC.createWithArray([circle]))
+        assert create((circle,)) is not None
 
 
 def test_move_and_copy() -> None:
@@ -758,9 +786,13 @@ def test_rectangular_and_circular_patterns() -> None:
     circle = circle_curve(sketch, (0, 0), 0.2)
     axis = line(sketch, (0, -1), (1, -1))
     spacing = adsk.fusion.PatternDistanceType.SpacingPatternDistanceType
-    data = gc.createRectangularPatternInput(OC.createWithArray([circle]), spacing)
+    data = gc.createRectangularPatternInput([circle], spacing)
     data.setDirectionOne(axis, VI.createByReal(3), VI.createByString("10 mm"))
-    data.setDirectionTwo(None, VI.createByReal(1), VI.createByReal(0))
+    with pytest.raises(RuntimeError, match="invalid argument directionTwoEntity"):
+        data.setDirectionTwo(None, VI.createByReal(1), VI.createByReal(0))
+    with pytest.raises(RuntimeError, match="invalid argument directionOneEntity"):
+        data.setDirectionOne(None, VI.createByReal(3), VI.createByString("10 mm"))
+    data.quantityTwo, data.distanceTwo = VI.createByReal(1), VI.createByReal(0)
     rect = gc.addRectangularPattern(data)
     assert rect.objectType == "adsk::fusion::RectangularPatternConstraint"
     centres = [xy(c.centerSketchPoint) for c in rect.createdEntities]
@@ -770,7 +802,7 @@ def test_rectangular_and_circular_patterns() -> None:
 
     center = sketch.originPoint
     dot = circle_curve(sketch, (1, 0), 0.1)
-    data2 = gc.createCircularPatternInput(OC.createWithArray([dot]), center)
+    data2 = gc.createCircularPatternInput([dot], center)
     data2.quantity = VI.createByReal(4)
     data2.totalAngle = VI.createByString("360 deg")
     circular = gc.addCircularPattern(data2)

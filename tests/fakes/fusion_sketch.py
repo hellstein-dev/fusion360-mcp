@@ -179,6 +179,18 @@ def _items(value: Any) -> list[Any]:
     return list(value)
 
 
+def _vector(value: Any, method: str, position: int, item_type: str) -> list[Any]:
+    """A ``std::vector<...>`` argument: live Fusion takes a Python list (or tuple) only and
+    rejects an ``ObjectCollection`` with this ``TypeError``."""
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(
+            f"in method 'GeometricConstraints_{method}', argument {position} of type "
+            f"'std::vector< adsk::core::Ptr< adsk::fusion::{item_type} >,"
+            f"std::allocator< adsk::core::Ptr< adsk::fusion::{item_type} > > > const &'"
+        )
+    return list(value)
+
+
 def _kind(obj: Any) -> str:
     object_type = getattr(obj, "objectType", None)
     if isinstance(object_type, str) and object_type:
@@ -1018,13 +1030,19 @@ class FakeRectangularPatternConstraintInput:
         self.isSymmetricInDirectionOne = False
         self.isSymmetricInDirectionTwo = False
 
+    # The docs allow a null direction entity here; live Fusion rejects it (c15 2.2), so the
+    # default (sketch X / perpendicular) direction is set through the properties instead.
     def setDirectionOne(self, directionOneEntity: Any, quantityOne: Any, distanceOne: Any) -> bool:
+        if directionOneEntity is None:
+            raise RuntimeError("3 : invalid argument directionOneEntity")
         self.directionOneEntity = directionOneEntity
         self.quantityOne = quantityOne
         self.distanceOne = distanceOne
         return True
 
     def setDirectionTwo(self, directionTwoEntity: Any, quantityTwo: Any, distanceTwo: Any) -> bool:
+        if directionTwoEntity is None:
+            raise RuntimeError("3 : invalid argument directionTwoEntity")
         self.directionTwoEntity = directionTwoEntity
         self.quantityTwo = quantityTwo
         self.distanceTwo = distanceTwo
@@ -1460,7 +1478,7 @@ class FakeGeometricConstraints(_SketchView):
 
     def createOffsetInput(self, curves: Any, offset: Any) -> FakeOffsetConstraintInput:
         self._record("createOffsetInput", curves, offset)
-        items = _items(curves)
+        items = _vector(curves, "createOffsetInput", 2, "SketchCurve")
         for curve in items:
             self._sketch._check(curve, CURVES, "curves")
         return FakeOffsetConstraintInput(items, offset)
@@ -1476,7 +1494,7 @@ class FakeGeometricConstraints(_SketchView):
         self, entities: Any, distanceType: int
     ) -> FakeRectangularPatternConstraintInput:
         self._record("createRectangularPatternInput", entities, distanceType)
-        items = _items(entities)
+        items = _vector(entities, "createRectangularPatternInput", 2, "SketchEntity")
         for entity in items:
             self._sketch._check(entity, POINT + CURVES, "entities")
         return FakeRectangularPatternConstraintInput(items, distanceType)
@@ -1488,10 +1506,10 @@ class FakeGeometricConstraints(_SketchView):
         return self._sketch._rectangular_pattern(input)
 
     def createCircularPatternInput(
-        self, entities: Any, centerPoint: Any
+        self, inputEntities: Any, centerPoint: Any
     ) -> FakeCircularPatternConstraintInput:
-        self._record("createCircularPatternInput", entities, centerPoint)
-        items = _items(entities)
+        self._record("createCircularPatternInput", inputEntities, centerPoint)
+        items = _vector(inputEntities, "createCircularPatternInput", 2, "SketchEntity")
         for entity in items:
             self._sketch._check(entity, POINT + CURVES, "entities")
         self._sketch._check(centerPoint, POINT, "centerPoint")
