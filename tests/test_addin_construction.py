@@ -16,8 +16,12 @@ from fusion_mcp.protocol.errors import BridgeError, ErrorCode
 from fusion_mcp.protocol.wire import Request
 from tests.fakes.brep import (
     FakeComponent,
+    FakeEdge,
     FakeOccurrence,
+    P,
+    V,
     add_occurrence,
+    circle_curve,
     fake_box_body,
     fake_cylinder_face,
 )
@@ -459,3 +463,109 @@ def test_along_path_accepts_a_sketch_curve_and_rejects_a_face() -> None:
         h.construction_plane, design, {"method": "along_path", "path": "line-1", "proportion": 2}
     )
     assert err.code is ErrorCode.INVALID_PARAMS and err.details["param"] == "proportion"
+
+
+# --- 3.5 construction.axis -------------------------------------------------------------------
+
+
+def test_axis_handler_is_registered_as_mutating() -> None:
+    spec = REGISTRY.get("construction.axis")
+    assert spec is not None and spec.mutating is True
+
+
+def test_axis_two_points() -> None:
+    design, box = box_design()
+    a = box.vertices.item(0)
+    params = {"method": "two_points", "points": [a.entityToken, "origin:O"]}
+    run(h.construction_axis, design, params)
+    root = design.rootComponent
+    name, args = setter_call(root.constructionAxes)
+    assert name == "setByTwoPoints"
+    assert args == (a, root.originConstructionPoint)
+
+
+def test_axis_two_points_needs_exactly_two() -> None:
+    design, box = box_design()
+    params = {"method": "two_points", "points": [box.vertices.item(0).entityToken]}
+    err = error(h.construction_axis, design, params)
+    assert err.code is ErrorCode.INVALID_PARAMS and err.details["param"] == "points"
+    assert design.rootComponent.constructionAxes.inputs == []
+
+
+def test_axis_edge() -> None:
+    design, box = box_design()
+    edge = box.edges.item(3)
+    run(h.construction_axis, design, {"method": "edge", "edge": edge.entityToken})
+    assert setter_call(design.rootComponent.constructionAxes) == ("setByEdge", (edge,))
+
+
+def test_axis_edge_rejects_a_circular_edge() -> None:
+    design = fake_construction_design()
+    arc = design.add_entity(
+        FakeEdge(circle_curve(P(0, 0, 0), V(0, 0, 1), 0.5), 3.14, P(0.5, 0, 0), token="circle")
+    )
+    err = error(h.construction_axis, design, {"method": "edge", "edge": arc.entityToken})
+    assert err.details == {"param": "edge", "expected": "linear", "got": "BRepEdge (circle)"}
+
+
+def test_axis_cylinder_returns_the_axis_description() -> None:
+    design, cylinder = cylinder_design()
+    root = design.rootComponent
+    root.constructionAxes.geometry = (P(1, 2, 0), V(0, 0, 1))
+    out = run(h.construction_axis, design, {"method": "cylinder", "face": "cyl"})
+    assert setter_call(root.constructionAxes) == ("setByCircularFace", (cylinder,))
+    assert out["type"] == "ConstructionAxis"
+    assert out["origin_mm"] == [10.0, 20.0, 0.0]
+    assert out["direction"] == [0.0, 0.0, 1.0]
+    assert out["health"] == "ok"
+
+
+def test_axis_cylinder_rejects_a_planar_face() -> None:
+    design, box = box_design()
+    err = error(
+        h.construction_axis, design, {"method": "cylinder", "face": face(box, "+x").entityToken}
+    )
+    assert err.details == {"param": "face", "expected": "circular_face", "got": "BRepFace (plane)"}
+
+
+def test_axis_perpendicular_at_point() -> None:
+    design, box = box_design()
+    top, corner = face(box, "+z"), box.vertices.item(7)
+    params = {
+        "method": "perpendicular_at_point",
+        "face": top.entityToken,
+        "point": corner.entityToken,
+    }
+    run(h.construction_axis, design, params)
+    name, args = setter_call(design.rootComponent.constructionAxes)
+    assert name == "setByPerpendicularAtPoint"
+    assert args == (top, corner)
+
+
+def test_axis_two_planes_of_origin() -> None:
+    design = fake_construction_design()
+    root = design.rootComponent
+    out = run(
+        h.construction_axis,
+        design,
+        {"method": "two_planes", "plane": "origin:XZ", "plane2": "origin:YZ"},
+    )
+    name, args = setter_call(root.constructionAxes)
+    assert name == "setByTwoPlanes"
+    assert args == (root.xZConstructionPlane, root.yZConstructionPlane)
+    assert [abs(c) for c in out["direction"]] == [0.0, 0.0, 1.0]
+
+
+def test_axis_two_parallel_planes_fails_without_a_trace() -> None:
+    design = fake_construction_design()
+    axes = design.rootComponent.constructionAxes
+    axes.add_error = "The planes are parallel"
+    response = dispatch(
+        design,
+        "construction.axis",
+        {"method": "two_planes", "plane": "origin:XY", "plane2": "origin:XY"},
+    )
+    assert response.ok is False
+    assert response.error.code is ErrorCode.FUSION_API_ERROR
+    assert "parallel" in response.error.message
+    assert axes.count == 0 and design.timeline.count == 0

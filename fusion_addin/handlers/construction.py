@@ -52,7 +52,13 @@ SETTERS: dict[str, dict[str, str]] = {
         "tangent_at_point": "setByTangentAtPoint",
         "along_path": "setByDistanceOnPath",
     },
-    "axis": {},
+    "axis": {
+        "two_points": "setByTwoPoints",
+        "edge": "setByEdge",
+        "cylinder": "setByCircularFace",
+        "perpendicular_at_point": "setByPerpendicularAtPoint",
+        "two_planes": "setByTwoPlanes",
+    },
     "point": {},
 }
 
@@ -161,3 +167,8 @@ def _create(ctx: Any, kind: str, params: dict[str, Any]) -> dict[str, Any]:
 @handler("construction.plane", mutating=True)
 def construction_plane(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     return _create(ctx, "plane", params)
+
+
+@handler("construction.axis", mutating=True)
+def construction_axis(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    return _create(ctx, "axis", params)
