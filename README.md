@@ -263,6 +263,50 @@ pattern_mirror(entities=<all bodies>, plane="origin:YZ")
 body_combine(target=cube, tools=<the other bodies>)
 ```
 
+## Assemblies
+
+The `assembly_*` tools build multi-part designs: components, occurrences, joints and
+interference checks.
+
+| Tool | What it does |
+|------|--------------|
+| `assembly_list` | Components and occurrences (transform, grounded, light bulb, visibility, joint count) |
+| `assembly_new_component` / `assembly_component_from_bodies` | Empty component with a new occurrence (under root or a parent occurrence), or a component made from bodies of one component |
+| `assembly_activate` / `assembly_rename_component` | Activate an occurrence (or root); rename a component (returns the new occurrence paths) |
+| `assembly_add_occurrence` | Insert another occurrence of a component, referenced or as an independent copy |
+| `assembly_transform_occurrence` | Move or rotate an occurrence, or place it by origin and axes; the position is captured with a snapshot |
+| `assembly_set_occurrence_state` / `assembly_delete` | Ground, show or hide an occurrence; delete occurrences, joints, joint origins, rigid groups |
+| `assembly_create_joint_origin` | Joint origin on a point, face, curve or profile, in the component that owns the geometry |
+| `assembly_create_joint` / `assembly_create_as_built_joint` | Rigid, revolute, slider, cylindrical, pin-slot, planar or ball joint (in root) |
+| `assembly_set_joint_limits` / `assembly_drive_joint` | Joint limits per degree of freedom; move a joint to values (clamped values are reported) |
+| `assembly_create_rigid_group` / `assembly_list_joints` | Lock occurrences together; list joints, as-built joints, joint origins and rigid groups |
+| `assembly_analyze_interference` | Overlapping pairs of occurrences or bodies with volume and bounding box |
+
+- **Refs.** Components are `component:<name>`, occurrences `occurrence:<fullPathName>`
+  (`occurrence:Box:1`, nested `occurrence:Box:1+Hinge:1`). An entity seen through an
+  occurrence is `<native ref>@<occurrence path>` (`AbC=@Lid:1`, `origin:Z@Lid:1`); all
+  tools return and accept this form. A native ref of a component inserted exactly once is
+  coerced to that occurrence; with several occurrences the error lists the candidates.
+  Renaming a component changes its occurrence paths, so old refs stop resolving.
+- **Units.** Lengths in mm, angles in degrees; joint values and limits use degrees for
+  rotation/pitch/yaw/roll and mm for slides.
+- **Atomicity.** Created components, occurrences, joints and groups are removed on failure;
+  names, grounding, visibility, transforms, joint values, limits and the active component
+  are restored.
+
+Example: a lid on a hinge:
+
+```text
+assembly_new_component(name="Box"); assembly_new_component(name="Lid")   # + geometry
+assembly_set_occurrence_state(occurrence="occurrence:Box:1", grounded=true)
+inspect_query(kind="edge", scope=["occurrence:Box:1"], direction=[1, 0, 0], ...) -> E2=@Box:1
+assembly_create_joint(type="revolute", geometry_one={"kind": "curve", "entity": "E1=@Lid:1"},
+                      geometry_two={"kind": "curve", "entity": "E2=@Box:1"},
+                      motion={"axis": "E2=@Box:1"})
+assembly_drive_joint(joint=<joint ref>, values={"rotation": 90})
+assembly_analyze_interference(items=["occurrence:Box:1", "occurrence:Lid:1"])
+```
+
 ## Limitations
 
 - **Timeouts.** Every request has a timeout (`execute_python` takes `timeout_s`, default
