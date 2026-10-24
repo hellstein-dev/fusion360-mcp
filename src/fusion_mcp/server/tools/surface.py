@@ -259,8 +259,9 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
             Field(min_length=2, description="At least 2 surface bodies or faces to join"),
         ],
         tolerance: Annotated[
-            Length, Field(description="Largest gap to close, in `units` (default 0.1 mm)")
-        ] = 0.1,
+            Length | None,
+            Field(description="Largest gap to close, in `units`; omitted = 0.1 mm in any units"),
+        ] = None,
         operation: OperationArg = "new_body",
         units: UnitsArg = "mm",
     ) -> CallToolResult:

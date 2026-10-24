@@ -216,10 +216,11 @@ def test_stitch() -> None:
     data = {**feature_result("StitchFeature"), "is_solid": True}
     assert sent("surface_stitch", "surface.stitch", {"surfaces": ["a", "b"]}, data) == {
         "surfaces": ["a", "b"],
-        "tolerance": 0.1,
         "operation": "new_body",
         "units": "mm",
     }
+    params = sent("surface_stitch", "surface.stitch", {"surfaces": ["a", "b"], "units": "in"}, data)
+    assert "tolerance" not in params  # the handler defaults to 0.1 mm whatever the units
     params = sent(
         "surface_stitch",
         "surface.stitch",
