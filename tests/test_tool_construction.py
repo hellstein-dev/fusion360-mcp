@@ -189,3 +189,62 @@ def test_axis_has_no_plane_only_fields() -> None:
     assert result.is_error is True and bridge.calls == []
     rejected, bridge = call("construction_axis", {"method": "offset", "plane": "origin:XY"})
     assert rejected.is_error is True and bridge.calls == []
+
+
+# --- 4.3 construction_point ------------------------------------------------------------------
+
+POINT = {
+    "ref": "point-1",
+    "type": "ConstructionPoint",
+    "name": "Point1",
+    "point_mm": [0.0, 0.0, 0.0],
+    "health": "ok",
+}
+
+
+def test_point_methods_send_their_fields() -> None:
+    cases: list[dict[str, Any]] = [
+        {"method": "vertex", "point": "v"},
+        {"method": "two_edges", "edge": "a", "edge2": "origin:Z"},
+        {
+            "method": "three_planes",
+            "plane": "origin:XY",
+            "plane2": "origin:XZ",
+            "plane3": "origin:YZ",
+        },
+        {"method": "edge_plane", "edge": "e", "plane": "origin:XY"},
+        {"method": "center", "entity": "hole-edge", "name": "Hinge", "component": "component:Lid"},
+    ]
+    for arguments in cases:
+        bridge = FakeBridge({"construction.point": POINT})
+        result, _ = call("construction_point", arguments, bridge)
+        assert result.is_error is False, arguments
+        assert bridge.last.method == "construction.point"
+        assert bridge.last.params == arguments
+    assert json.loads(result_text(result)) == POINT
+
+
+def test_point_validation_errors_do_not_call_the_bridge() -> None:
+    result, bridge = call(
+        "construction_point",
+        {"method": "three_planes", "plane": "origin:XY", "plane2": "origin:XZ"},
+    )
+    assert bridge.calls == [] and result.is_error is True
+    assert '"missing": [\n    "plane3"\n  ]' in result_text(result)
+    result, bridge = call("construction_point", {"method": "center", "entity": "c", "point": "v"})
+    assert bridge.calls == [] and result.is_error is True
+
+
+def test_point_kind_error_from_the_add_in_reaches_the_agent() -> None:
+    error = BridgeError(
+        ErrorCode.INVALID_PARAMS,
+        "parameter 'entity' must be a circular edge or arc, ...",
+        {"param": "entity", "expected": "center_source", "got": "BRepEdge (line)"},
+    )
+    result, _ = call(
+        "construction_point",
+        {"method": "center", "entity": "line"},
+        FakeBridge({"construction.point": error}),
+    )
+    assert result.is_error is True
+    assert '"expected": "center_source"' in result_text(result)

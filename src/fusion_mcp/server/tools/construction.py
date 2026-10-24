@@ -30,6 +30,7 @@ PlaneMethod = Literal[
     "along_path",
 ]
 AxisMethod = Literal["two_points", "edge", "cylinder", "perpendicular_at_point", "two_planes"]
+PointMethod = Literal["vertex", "two_edges", "three_planes", "edge_plane", "center"]
 
 Ref = Annotated[str, Field(min_length=1)]
 PlaneRef = Annotated[
@@ -193,3 +194,63 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
             name=name,
         )
         return await _construct(bridge, "axis", params)
+
+    @mcp.tool(name="construction_point")
+    async def construction_point(
+        method: Annotated[PointMethod, Field(description="How the point is defined")],
+        point: PointRef = None,
+        edge: EdgeRef = None,
+        edge2: EdgeRef = None,
+        plane: PlaneRef = None,
+        plane2: PlaneRef = None,
+        plane3: PlaneRef = None,
+        entity: Annotated[
+            str | None,
+            Field(
+                min_length=1,
+                description="center: circular edge/arc, sketch circle/arc, sphere or torus face",
+            ),
+        ] = None,
+        component: Component = None,
+        name: Name = None,
+    ) -> CallToolResult:
+        """Create a construction point — a joint origin, a hinge center, a sketch anchor.
+
+        Give `method` and exactly its fields:
+
+        | method       | fields                                              |
+        |--------------|-----------------------------------------------------|
+        | vertex       | point (vertex, sketch point or construction point)  |
+        | two_edges    | edge, edge2: their intersection                     |
+        | three_planes | plane, plane2, plane3: their intersection           |
+        | edge_plane   | edge, plane: where the edge crosses the plane       |
+        | center       | entity: center of a circle, arc, sphere or torus    |
+
+        Points by coordinates are sketch points (sketch_draw), not construction points.
+        Refs: `origin:XY|XZ|YZ|X|Y|Z|O` or refs from inspect_query (e.g. a hole edge:
+        inspect_query(kind="edge", curve_type="circle")). A wrong entity kind fails with
+        INVALID_PARAMS and `details {param, expected, got}`; a definition Fusion cannot
+        build (edges that do not meet) fails with FUSION_API_ERROR and leaves the timeline
+        unchanged.
+
+        Returns {"ref", "type": "ConstructionPoint", "name", "point_mm", "health",
+        "warning"?}.
+
+        Examples:
+        - construction_point(method="center", entity=<circular edge ref>)
+        - construction_point(method="three_planes", plane="origin:XY", plane2="origin:XZ",
+          plane3="origin:YZ")
+        """
+        params = _given(
+            method=method,
+            point=point,
+            edge=edge,
+            edge2=edge2,
+            plane=plane,
+            plane2=plane2,
+            plane3=plane3,
+            entity=entity,
+            component=component,
+            name=name,
+        )
+        return await _construct(bridge, "point", params)
