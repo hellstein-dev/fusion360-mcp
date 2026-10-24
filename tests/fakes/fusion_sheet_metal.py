@@ -300,6 +300,29 @@ def _flat_pattern_maker(component: Any, design: FakeDesign) -> Any:
     return createFlatPattern
 
 
+class FakeAttribute:
+    def __init__(self, group: str, name: str, value: str) -> None:
+        self.groupName = group
+        self.name = name
+        self.value = value
+
+
+class FakeAttributes:
+    """``Component.attributes``: ``add`` replaces an attribute of the same group and name."""
+
+    def __init__(self) -> None:
+        self.items: dict[tuple[str, str], FakeAttribute] = {}
+
+    def add(self, group: str, name: str, value: str) -> FakeAttribute:
+        attribute = FakeAttribute(group, name, value)
+        attribute.deleteMe = lambda: self.items.pop((group, name), None) is not None  # type: ignore[attr-defined]
+        self.items[(group, name)] = attribute
+        return attribute
+
+    def itemByName(self, group: str, name: str) -> FakeAttribute | None:
+        return self.items.get((group, name))
+
+
 class FakeWorkspace:
     def __init__(self, workspace_id: str, app: Any, design: Any) -> None:
         self.id = workspace_id
@@ -357,6 +380,7 @@ def install_sheet_metal(design: FakeDesign, preview: bool = True) -> FakeDesign:
     root.flat_bends = [(True, math.pi / 2)]
     root.flat_pattern_calls = []
     root.flat_pattern_error = None
+    root.attributes = FakeAttributes()
     root.createFlatPattern = _flat_pattern_maker(root, design)
     for attr, (kind, prefix, methods) in SHEET_METAL_COLLECTIONS.items():
         collection = FakeSheetMetalFeatures(root, design, kind, prefix, methods if preview else ())

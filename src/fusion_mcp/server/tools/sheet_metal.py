@@ -448,8 +448,11 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         again afterwards.
 
         Errors: a face of a non-sheet-metal body, an existing flat pattern without
-        replace=true -> INVALID_PARAMS (the existing one is kept). With replace=true the old
-        flat pattern is deleted first; if the new one then fails, none is left.
+        replace=true -> INVALID_PARAMS (the existing one is kept). replace=true is atomic: if
+        the new flat pattern fails, the old one is recreated from its remembered stationary
+        face. A flat pattern not made by this tool (or whose face changed) cannot be
+        restored, so replace refuses it (INVALID_PARAMS reason=not_restorable, nothing
+        changed) - delete it with sheet_metal_delete_flat_pattern first.
 
         Returns {"component", "exists": true, "size_mm": [x, y], "thickness_mm",
         "bend_count", "bends": [{"angle_deg", "is_up"}], "replaced"}.

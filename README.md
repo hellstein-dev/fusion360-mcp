@@ -443,7 +443,10 @@ Fusion API coverage:
   them again with `inspect_query`.
 - **Flat pattern.** One per component, addressed by the component (default: root).
   `sheet_metal_create_flat_pattern` refuses an existing one unless `replace=true`, and
-  switches Fusion back to the design workspace afterwards. Export paths follow the export
+  switches Fusion back to the design workspace afterwards. `replace` is atomic: the tool
+  remembers the stationary face (a component attribute) and recreates the old flat pattern
+  if the new one fails; a flat pattern made in the UI cannot be restored, so `replace`
+  refuses it (`not_restorable`) - delete it with `sheet_metal_delete_flat_pattern` first. Export paths follow the export
   rules above (absolute, `.dxf` / `.step` / `.stp`, `overwrite`).
 
 Bracket recipe:

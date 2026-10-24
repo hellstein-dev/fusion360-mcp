@@ -738,6 +738,40 @@ def test_create_flat_pattern_existing() -> None:
     assert s.root.flatPattern is not first
 
 
+def test_replace_flat_pattern_failure_restores_old() -> None:
+    s = Setup()
+    s.run(h.sheet_metal_create_flat_pattern, {"stationary_face": "top"})
+    original = s.root.createFlatPattern
+    calls: list[Any] = []
+
+    def failing_once(face: Any) -> Any:
+        calls.append(face)
+        if len(calls) == 1:
+            raise RuntimeError("flat pattern failed")
+        return original(face)
+
+    s.root.createFlatPattern = failing_once
+    err = s.error(h.sheet_metal_create_flat_pattern, {"stationary_face": "side", "replace": True})
+    assert err.code is ErrorCode.FUSION_API_ERROR
+    assert calls == [s.side, s.top]
+    restored = s.root.flatPattern
+    assert restored is not None and restored.stationaryFace is s.top
+    assert s.app.activeProduct is s.design
+    assert s.root.attributes.itemByName("fusion_mcp", "flat_pattern_face").value == (
+        s.top.entityToken
+    )
+
+
+def test_replace_flat_pattern_not_restorable() -> None:
+    s = Setup()
+    ui_made = s.root.createFlatPattern(s.top)  # made outside the tool: no remembered face
+    err = s.invalid(
+        h.sheet_metal_create_flat_pattern, {"stationary_face": "top", "replace": True}, "replace"
+    )
+    assert err.details["reason"] == "not_restorable"
+    assert s.root.flatPattern is ui_made and not ui_made.deleted
+
+
 def test_create_flat_pattern_non_sheet_metal() -> None:
     s = Setup()
     s.invalid(
@@ -768,8 +802,17 @@ def test_get_and_delete_flat_pattern() -> None:
     s.run(h.sheet_metal_create_flat_pattern, {"stationary_face": "top"})
     got = s.run(h.sheet_metal_get_flat_pattern, {"component": "root"})
     assert got["exists"] is True and got["bend_count"] == 1
+    assert s.root.attributes.itemByName("fusion_mcp", "flat_pattern_face") is not None
     assert s.run(h.sheet_metal_delete_flat_pattern, {}) == {"component": "root", "deleted": True}
     assert s.root.flatPattern is None
+    # The remembered face goes with it: a UI-made flat pattern is then not replaced blindly.
+    assert s.root.attributes.itemByName("fusion_mcp", "flat_pattern_face") is None
+    s.root.createFlatPattern(s.side)
+    err_replace = s.invalid(
+        h.sheet_metal_create_flat_pattern, {"stationary_face": "top", "replace": True}, "replace"
+    )
+    assert err_replace.details["reason"] == "not_restorable"
+    assert s.run(h.sheet_metal_delete_flat_pattern, {})["deleted"] is True
     err = s.error(h.sheet_metal_delete_flat_pattern, {})
     assert err.code is ErrorCode.ENTITY_NOT_FOUND
 

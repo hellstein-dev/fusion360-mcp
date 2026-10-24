@@ -15,6 +15,7 @@ their component (INV-7).
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 import adsk.fusion
@@ -645,12 +646,55 @@ def _back_to_design(ctx: Any, design: Any) -> None:
         raise _api_error("could not return to the design workspace after the flat pattern")
 
 
+ATTRIBUTE_GROUP = "fusion_mcp"
+ATTRIBUTE_FACE = "flat_pattern_face"
+
+
+def _remember_face(component: Any, face: Any) -> None:
+    """Keep the entity token of the stationary face in a component attribute (not a
+    timeline item) so ``replace`` can recreate this flat pattern."""
+    attributes = _get(component, "attributes")
+    token = _get(face, "entityToken")
+    if attributes is None or not isinstance(token, str) or not token:
+        return
+    attributes.add(ATTRIBUTE_GROUP, ATTRIBUTE_FACE, token)
+
+
+def _forget_face(component: Any) -> None:
+    """Drop the remembered face (the flat pattern it belonged to is gone)."""
+    attributes = _get(component, "attributes")
+    attribute = attributes.itemByName(ATTRIBUTE_GROUP, ATTRIBUTE_FACE) if attributes else None
+    if attribute is not None:
+        attribute.deleteMe()
+
+
+def _remembered_face(ctx: Any, component: Any) -> Any:
+    """The remembered stationary face of the component's flat pattern, or ``None``."""
+    attributes = _get(component, "attributes")
+    try:
+        attribute = attributes.itemByName(ATTRIBUTE_GROUP, ATTRIBUTE_FACE) if attributes else None
+        token = _get(attribute, "value")
+        if not isinstance(token, str) or not token:
+            return None
+        found = ctx.design.findEntityByToken(token)
+    except Exception:
+        return None
+    face = found[0] if found else None
+    if face is None or type_name(face) != "BRepFace" or not _is_sheet_metal(_get(face, "body")):
+        return None
+    return face
+
+
 @handler("sheet_metal.create_flat_pattern", mutating=True)
 def sheet_metal_create_flat_pattern(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     """Flat pattern of a component from a stationary face of its sheet metal body (D7).
 
-    With ``replace`` the existing flat pattern is deleted first; if the new one then fails,
-    the component is left without a flat pattern (Fusion cannot restore a deleted one)."""
+    A component has at most one flat pattern, so ``replace`` deletes the existing one first.
+    To keep the call atomic (INV-5) the stationary face of every flat pattern this tool
+    creates is remembered in a component attribute; if the new flat pattern fails, the old one
+    is recreated from that face. A flat pattern whose face is unknown (made in the UI) or no
+    longer resolvable is not replaced (``INVALID_PARAMS`` ``not_restorable``, nothing
+    changed): delete it with ``sheet_metal.delete_flat_pattern`` first."""
     face = resolve_one(ctx, ctx.require(params, "stationary_face"), FACE, "stationary_face")
     _require_sheet_metal(_get(face, "body"), "stationary_face")
     replace = _bool(ctx, params, "replace", False)
@@ -664,15 +708,35 @@ def sheet_metal_create_flat_pattern(ctx: Any, params: dict[str, Any]) -> dict[st
             reason="exists",
         )
     create = api.require_api(component, "createFlatPattern", "Component.createFlatPattern")
+    old_face = None
+    if existing is not None:
+        old_face = _remembered_face(ctx, component)
+        if old_face is None:
+            raise _invalid(
+                "the existing flat pattern cannot be restored if the new one fails (it was not "
+                "created by this tool or its face changed): delete it with "
+                "sheet_metal_delete_flat_pattern, then create the new one",
+                param="replace",
+                reason="not_restorable",
+            )
     design = ctx.design
 
     with Compensation() as comp:
         if existing is not None:
+
+            def restore_old() -> None:
+                if create(old_face) is None:
+                    raise RuntimeError("Fusion did not recreate the previous flat pattern")
+                _remember_face(component, old_face)
+                _back_to_design(ctx, design)
+
             delete_entity(existing)
+            comp.add(restore_old, "recreate the previous flat pattern")
         flat = create(face)
         if flat is None:
             raise _api_error("Fusion did not create the flat pattern")
         comp.add(lambda: delete_entity(flat), "delete flat pattern")
+        _remember_face(component, face)
         comp.add(lambda: _back_to_design(ctx, design), "return to the design workspace")
         _back_to_design(ctx, design)
         result = describe_flat_pattern(ctx, component, flat)
@@ -697,6 +761,10 @@ def sheet_metal_delete_flat_pattern(ctx: Any, params: dict[str, Any]) -> dict[st
     flat = flat_pattern_of(component)
     if flat is None:
         raise no_flat_pattern(ctx, component)
+    # Forget first: a stale face would let a later ``replace`` restore the wrong pattern,
+    # a missing one only makes it refuse (``not_restorable``).
+    with contextlib.suppress(Exception):
+        _forget_face(component)
     delete_entity(flat)
     return {"component": component_ref(ctx, component), "deleted": True}
 
