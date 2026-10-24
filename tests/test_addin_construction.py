@@ -12,6 +12,7 @@ from fusion_addin.core.context import Context
 from fusion_addin.core.dispatcher import Dispatcher
 from fusion_addin.core.registry import REGISTRY
 from fusion_addin.handlers import construction as h
+from fusion_mcp.protocol.construction import METHODS
 from fusion_mcp.protocol.errors import BridgeError, ErrorCode
 from fusion_mcp.protocol.wire import Request
 from tests.fakes.brep import (
@@ -25,7 +26,13 @@ from tests.fakes.brep import (
     fake_box_body,
     fake_cylinder_face,
 )
-from tests.fakes.construction import fake_construction_design, install_construction
+from tests.fakes.construction import (
+    AXIS_SETTERS,
+    PLANE_SETTERS,
+    POINT_SETTERS,
+    fake_construction_design,
+    install_construction,
+)
 from tests.fakes.design import FakeApp, FakeEntity
 
 adsk = fusion_addin.adsk
@@ -569,3 +576,96 @@ def test_axis_two_parallel_planes_fails_without_a_trace() -> None:
     assert response.error.code is ErrorCode.FUSION_API_ERROR
     assert "parallel" in response.error.message
     assert axes.count == 0 and design.timeline.count == 0
+
+
+# --- 3.6 construction.point ------------------------------------------------------------------
+
+
+def test_point_handler_is_registered_as_mutating() -> None:
+    spec = REGISTRY.get("construction.point")
+    assert spec is not None and spec.mutating is True
+
+
+def test_point_vertex_and_sketch_point() -> None:
+    design, box = box_design()
+    points = design.rootComponent.constructionPoints
+    corner = box.vertices.item(7)
+    out = run(h.construction_point, design, {"method": "vertex", "point": corner.entityToken})
+    assert setter_call(points) == ("setByPoint", (corner,))
+    assert out["type"] == "ConstructionPoint"
+    assert out["point_mm"] == [10.0, 20.0, 30.0]
+    sketch_point = design.add_entity(FakeEntity("adsk::fusion::SketchPoint", token="sp-1"))
+    run(h.construction_point, design, {"method": "vertex", "point": "sp-1"})
+    assert setter_call(points) == ("setByPoint", (sketch_point,))
+
+
+def test_point_two_edges() -> None:
+    design, box = box_design()
+    one, two = box.edges.item(0), box.edges.item(1)
+    params = {"method": "two_edges", "edge": one.entityToken, "edge2": "origin:Z"}
+    run(h.construction_point, design, params)
+    root = design.rootComponent
+    assert setter_call(root.constructionPoints) == (
+        "setByTwoEdges",
+        (one, root.zConstructionAxis),
+    )
+    err = error(
+        h.construction_point,
+        design,
+        {"method": "two_edges", "edge": two.entityToken, "edge2": face(box, "+z").entityToken},
+    )
+    assert err.details == {"param": "edge2", "expected": "edge", "got": "BRepFace (plane)"}
+
+
+def test_point_three_origin_planes() -> None:
+    design = fake_construction_design()
+    root = design.rootComponent
+    params = {
+        "method": "three_planes",
+        "plane": "origin:XY",
+        "plane2": "origin:XZ",
+        "plane3": "origin:YZ",
+    }
+    out = run(h.construction_point, design, params)
+    name, args = setter_call(root.constructionPoints)
+    assert name == "setByThreePlanes"
+    assert args == (root.xYConstructionPlane, root.xZConstructionPlane, root.yZConstructionPlane)
+    assert out["point_mm"] == [0.0, 0.0, 0.0]
+
+
+def test_point_edge_plane() -> None:
+    design, box = box_design()
+    edge = box.edges.item(2)
+    params = {"method": "edge_plane", "edge": edge.entityToken, "plane": "origin:XY"}
+    run(h.construction_point, design, params)
+    root = design.rootComponent
+    assert setter_call(root.constructionPoints) == (
+        "setByEdgePlane",
+        (edge, root.xYConstructionPlane),
+    )
+
+
+def test_point_center_of_a_circular_edge() -> None:
+    design = fake_construction_design()
+    circle = design.add_entity(
+        FakeEdge(circle_curve(P(1, 2, 3), V(0, 0, 1), 0.5), 3.14, P(1.5, 2, 3), token="hole")
+    )
+    out = run(h.construction_point, design, {"method": "center", "entity": "hole", "name": "Hinge"})
+    assert setter_call(design.rootComponent.constructionPoints) == ("setByCenter", (circle,))
+    assert out["point_mm"] == [10.0, 20.0, 30.0]
+    assert out["name"] == "Hinge"
+
+
+def test_point_center_rejects_a_straight_edge() -> None:
+    design, box = box_design()
+    err = error(
+        h.construction_point, design, {"method": "center", "entity": box.edges.item(0).entityToken}
+    )
+    assert err.details == {"param": "entity", "expected": "center_source", "got": "BRepEdge (line)"}
+
+
+def test_every_method_has_a_setter_fusion_inputs_have() -> None:
+    fusion_setters = {"plane": PLANE_SETTERS, "axis": AXIS_SETTERS, "point": POINT_SETTERS}
+    for kind, methods in METHODS.items():
+        assert set(h.SETTERS[kind]) == set(methods), kind
+        assert set(h.SETTERS[kind].values()) <= set(fusion_setters[kind]), kind

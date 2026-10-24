@@ -59,7 +59,13 @@ SETTERS: dict[str, dict[str, str]] = {
         "perpendicular_at_point": "setByPerpendicularAtPoint",
         "two_planes": "setByTwoPlanes",
     },
-    "point": {},
+    "point": {
+        "vertex": "setByPoint",
+        "two_edges": "setByTwoEdges",
+        "three_planes": "setByThreePlanes",
+        "edge_plane": "setByEdgePlane",
+        "center": "setByCenter",
+    },
 }
 
 
@@ -172,3 +178,8 @@ def construction_plane(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
 @handler("construction.axis", mutating=True)
 def construction_axis(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     return _create(ctx, "axis", params)
+
+
+@handler("construction.point", mutating=True)
+def construction_point(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    return _create(ctx, "point", params)

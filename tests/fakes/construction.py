@@ -133,7 +133,7 @@ def _center(args: tuple[Any, ...]) -> Any:
 
 
 def _vertex(args: tuple[Any, ...]) -> Any:
-    geometry = args[0].geometry
+    geometry: Any = getattr(args[0], "geometry", None)
     return geometry.copy() if hasattr(geometry, "copy") else None
 
 
