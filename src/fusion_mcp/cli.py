@@ -38,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall = commands.add_parser("uninstall-addin", help="remove the installed add-in")
     uninstall.add_argument("--addins-dir", type=Path, help="override Fusion's AddIns folder")
 
+    commands.add_parser(
+        "reload-addin",
+        help="development: hot-reload the running add-in's handler code (dev.reload)",
+    )
+
     config = commands.add_parser("print-config", help="print an MCP client config for this server")
     config.add_argument(
         "--client",
@@ -94,6 +99,38 @@ def _uninstall(args: argparse.Namespace) -> int:
     return 0
 
 
+def reload_addin(bridge: Any = None) -> int:
+    """Call ``dev.reload`` on the running add-in and print the result (c15 design D1).
+
+    Modules that hold the running bridge (entry point, server, dispatcher, registry, context)
+    are not reloaded: changing them still needs Utilities > Add-ins > FusionMCP > Stop, Run.
+    """
+    import asyncio
+
+    from fusion_mcp.protocol.errors import BridgeError
+    from fusion_mcp.server.bridge import BridgeClient
+
+    client = bridge if bridge is not None else BridgeClient()
+
+    async def go() -> Any:
+        try:
+            return await client.call("dev.reload")
+        finally:
+            close = getattr(client, "close", None)
+            if close is not None:
+                await close()
+
+    try:
+        result = asyncio.run(go())
+    except BridgeError as exc:
+        print(f"error: {exc.code.value}: {exc.message}", file=sys.stderr)
+        if exc.details:
+            print(json.dumps(exc.details, indent=2, default=str), file=sys.stderr)
+        return 1
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse ``argv`` and run the CLI. Returns the process exit code."""
     parser = build_parser()
@@ -104,6 +141,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _install(args)
     if args.command == "uninstall-addin":
         return _uninstall(args)
+    if args.command == "reload-addin":
+        return reload_addin()
     if args.command == "print-config":
         print(json.dumps(client_config(args.client), indent=2))
         return 0

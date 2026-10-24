@@ -53,6 +53,10 @@ class Registry:
     def names(self) -> list[str]:
         return sorted(self._handlers)
 
+    def clear(self) -> None:
+        """Drop every handler; the object stays the same (``dev.reload`` refills it)."""
+        self._handlers.clear()
+
     def __contains__(self, name: object) -> bool:
         return name in self._handlers
 

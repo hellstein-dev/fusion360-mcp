@@ -529,3 +529,23 @@ uv run pytest -q             # unit tests (adsk stubs, fake bridge)
 uv run pytest -m fusion      # smoke tests on a live Fusion with the add-in running
 uv run ruff check . && uv run ruff format --check . && uv run mypy .
 ```
+
+### Hot reload of the add-in
+
+Fusion keeps the add-in's modules in `sys.modules`, so an edit to a linked install is not
+picked up until the add-in restarts. To load edited handler code into the running add-in:
+
+```sh
+uv run fusion-mcp reload-addin   # calls dev.reload, prints reloaded modules and handler count
+```
+
+It clears the handler registry, drops the add-in's modules (and `fusion_mcp.protocol.*`) from
+`sys.modules`, imports them again (`handlers` first) and points the globals of the modules it
+keeps (the entry point's `Context`, say) at the new classes. Exit code is non-zero on error:
+an import error in an edited module comes back as `FUSION_API_ERROR` with the traceback
+(`status.get` and `dev.reload` keep working); fix the file and run `reload-addin` again. A
+few modules hold the running bridge and are never reloaded: the entry point `FusionMCP.py`,
+`core/server.py`, `core/dispatcher.py`, `core/registry.py` and `fusion_mcp.protocol.errors` /
+`wire` / `discovery`. After changing one of them restart the add-in: Utilities > Add-ins >
+FusionMCP > Stop, Run. A change to `handlers/dev.py` itself takes effect on the second
+`reload-addin`. `dev.reload` is for development only and is not an MCP tool.
