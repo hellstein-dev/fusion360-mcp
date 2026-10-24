@@ -192,6 +192,42 @@ class BRepBody:
         raise NotImplementedError
 
 
+class FormInsertionModes:
+    SimpleFormInsertionMode = 0
+    ExactFormInsertionMode = 1
+
+
+class FormEdgeInsertionSides:
+    SingleFormEdgeInsertionSide = 0
+    BothFormEdgeInsertionSide = 1
+
+
+class FormInsertEdgeInput:
+    """``FormInsertEdgeInput.create(edges, distance)`` (preview API, c14 D8)."""
+
+    objectType = "adsk::fusion::FormInsertEdgeInput"
+
+    def __init__(self, edges: Any, distance: float) -> None:
+        self.edges = edges
+        self.distance = distance
+        self.insertionMode = FormInsertionModes.SimpleFormInsertionMode
+        self.insertionSide = FormEdgeInsertionSides.SingleFormEdgeInsertionSide
+
+    @staticmethod
+    def create(edges: Any, distance: float) -> "FormInsertEdgeInput":
+        return FormInsertEdgeInput(edges, distance)
+
+
+class TemporaryBRepManager:
+    """``TemporaryBRepManager.get()`` returns ``instance``: tests install a fake (c14 D9)."""
+
+    instance: Any = None
+
+    @staticmethod
+    def get() -> Any:
+        return TemporaryBRepManager.instance
+
+
 class MeshRefinementSettings:
     MeshRefinementHigh = 0
     MeshRefinementMedium = 1
