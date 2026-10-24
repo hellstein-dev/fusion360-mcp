@@ -353,6 +353,48 @@ assembly_drive_joint(joint=<joint ref>, values={"rotation": 90})
 assembly_analyze_interference(items=["occurrence:Box:1", "occurrence:Lid:1"])
 ```
 
+## Материалы, экспорт и импорт
+
+Materials, appearances and file exchange:
+
+| Tool | What it does |
+|------|--------------|
+| `material_list_libraries` | Loaded libraries with their material and appearance counts |
+| `material_list` / `appearance_list` | Items of one library, of every library or of the design (`in_design`), with a name `query`, `limit` and `offset` |
+| `material_get` | Physical material and appearance of a body, component or occurrence |
+| `material_assign` | Physical material (mass, density) for a body, a component, or an occurrence (applied to its component) |
+| `appearance_assign` | Appearance for a body, face or occurrence; a library appearance is copied into the design first |
+| `appearance_set_color` | Plain RGBA colour (`"#RRGGBB"`, `"#RRGGBBAA"`, `[r, g, b(, a)]`): a design copy of a base appearance, reused when identical |
+| `export_cad` | Design, component or occurrence to STEP, IGES, SAT, SMT, F3D archive or USDZ |
+| `export_mesh` | Design, component, occurrence or body to STL, 3MF or OBJ (+ `.mtl`); refinement `low`/`medium`/`high`/`custom` |
+| `export_sketch_dxf` | A sketch to DXF |
+| `import_file` | STEP, IGES, SAT, SMT, F3D (as occurrences/bodies) or STL, OBJ, 3MF (as mesh bodies, `mesh_units`) into a component |
+
+- **Ids, not names.** Material and appearance names are localized and repeat across
+  libraries. Take the `id` from `material_list` / `appearance_list`. A name found in several
+  places fails with `details.candidates`. Library items are never modified. After
+  `material_assign`, check the mass with `inspect_physical_properties`.
+- **Paths.** Every path is absolute, and the extension must match the format (`.step`/`.stp`,
+  `.iges`/`.igs`, `.sat`, `.smt`, `.f3d`, `.usdz`, `.stl`, `.3mf`, `.obj`, `.dxf`). The tool
+  never appends an extension for you. An export also needs the directory to exist; an
+  import needs the file to exist. Bad paths fail with `INVALID_PARAMS` and
+  `details.reason` set to `not_absolute`, `bad_extension`, `parent_missing`, `is_directory`,
+  `exists` or `not_found`. The server checks the path before contacting Fusion.
+- **`overwrite`.** An existing file is replaced only with `overwrite=true`. The old file
+  (and for OBJ its `.mtl`) is deleted before the export, so if that export then fails, the
+  old file is gone. Every export reports the files it wrote with their sizes. An empty or
+  missing file is `FUSION_API_ERROR "export failed"`.
+- **Exporting F3D is not saving.** `export_cad(format="f3d")` writes a copy of the design to
+  a local archive; the document itself stays unsaved and keeps its name. To save the
+  document to the cloud project, use `document_save` (c04).
+- **Mesh settings.** Custom refinement values are numbers: `surface_deviation` and
+  `max_edge_length` in `units` (default mm), `normal_deviation` in degrees, and
+  `aspect_ratio`. Giving them without `refinement="custom"` is an error. `file_units` applies
+  to STL and OBJ only (3MF returns a warning), and `binary` to STL only.
+- **Import.** What was created is reported as refs in `created.occurrences`, `bodies` and
+  `mesh_bodies`. An import that produces nothing fails, and in a parametric design its
+  timeline items are rolled back. In a direct design, the created objects are deleted.
+
 ## Limitations
 
 - **Timeouts.** Every request has a timeout (`execute_python` takes `timeout_s`, default
