@@ -461,6 +461,51 @@ Bracket recipe:
 6. `sheet_metal_create_flat_pattern(stationary_face=<planar face>)` ->
    `sheet_metal_export_flat_pattern(path="C:/out/bracket.dxf")`.
 
+## Формы (T-splines)
+
+Organic shapes from T-spline bodies (the Form environment):
+
+| Tool | What it does |
+|------|--------------|
+| `form_list` | Form features of the design or a component with their T-spline bodies: control-mesh counts, bbox in mm, the B-Rep body ref |
+| `form_create_primitive` | Box, plane, cylinder, sphere, torus or quadball with sizes in mm, face counts, origin / directions and symmetry (`{"x","y","z"}` or `"circular"`), in a new or an existing form |
+| `form_create_from_tsm` / `form_get_tsm` | TSM (T-spline mesh) text or a `.tsm` file in and out |
+| `form_inspect` | Control-mesh vertices (control and smooth positions), edges (start, end, midpoint, crease) and faces (center) in mm |
+| `form_move` | Move vertices or faces picked by points, or the whole body, by a vector |
+| `form_crease` | Crease or smooth edges picked by points |
+| `form_insert_edge` | Insert edges next to edges of one loop (preview API) |
+| `form_convert_to_brep` | Independent B-Rep copy of the form's body (in a base feature), the source hidden |
+
+- **Not parametric.** The Fusion API takes primitive sizes as numbers: expressions and user
+  parameters are refused (`INVALID_PARAMS` "not parametric"), and a form does not follow
+  parameter changes. A parameter of another shape (e.g. `height` for a sphere) is refused.
+- **Points, not indices.** Control-mesh vertices, edges and faces have no stable ids
+  (INV-7). The editing tools pick them by points in mm: take the vertex `position`, the edge
+  `midpoint` or the face `center` from `form_inspect`. A point with nothing within
+  `tolerance` (0.5 mm) or equally near two elements (symmetric meshes) fails with
+  `details.nearest` and changes nothing.
+- **Atomic edits.** Every selector is resolved before the first change; if a later move or
+  crease fails, the earlier ones are undone. The form never stays in edit mode, and its
+  B-Rep is regenerated after every call - a body without a B-Rep is an error (rolled back).
+- **Convert = copy.** The API has no "Convert" command: `form_convert_to_brep` adds an
+  independent copy of the form's B-Rep (later form edits do not change it) and hides the form,
+  which stays in the timeline.
+- **TSM path for the rest.** Pull, Bridge, Fill Hole, Weld / Unweld, Subdivide, Merge, Thicken,
+  soft modification, sketch-driven forms (extrude / revolve / sweep / loft in Form), symmetry
+  changes after creation and mesh-to-form conversion have no Fusion API. Read the TSM with
+  `form_get_tsm`, edit the text and create the body again with `form_create_from_tsm` (or use
+  `execute_python` for what the API does have).
+- `form_insert_edge` uses the preview API: without it the tool fails with `FUSION_API_ERROR`
+  `reason="api_unavailable"`, nothing changed.
+
+Handle recipe:
+
+1. `form_create_primitive(shape="box", x_size=80, y_size=20, z_size=20, x_faces=4)`.
+2. `form_inspect(body=<body>, include=["faces"])` - pick the face centers to pull.
+3. `form_move(body=<body>, kind="face", near=[<center>], vector=[0, 0, 15])`.
+4. `form_crease(body=<body>, near=[<edge midpoint>])` for a sharp edge.
+5. `form_convert_to_brep(body=<body>, name="Handle")` -> shell / fillet the solid as usual.
+
 ## Limitations
 
 - **Timeouts.** Every request has a timeout (`execute_python` takes `timeout_s`, default
