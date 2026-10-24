@@ -118,6 +118,22 @@ def test_input_returns_provide_and_missing() -> None:
     assert not hasattr(inp, "edgeSetInputs")
 
 
+def test_fillet_and_chamfer_inputs_have_edge_sets_and_on_input_hook() -> None:
+    features = install_features(FakeComponent()).features
+    fillet = features.filletFeatures.createInput()
+    edge_set = fillet.edgeSetInputs.addVariableRadiusEdgeSet("edges", 1, 2, True)
+    assert isinstance(edge_set, FakeFeatureInput)
+    assert edge_set.create_method == "addVariableRadiusEdgeSet"
+    assert edge_set.create_args == ("edges", 1, 2, True)
+    assert fillet.edgeSetInputs.edge_sets == [edge_set]
+    assert fillet.log == []
+    chamfer = features.chamferFeatures.createInput2()
+    chamfer_set = chamfer.chamferEdgeSets.addEqualDistanceChamferEdgeSet("edges", 1, True)
+    assert chamfer.chamferEdgeSets.edge_sets == [chamfer_set]
+    features.filletFeatures.on_input = lambda inp: inp.missing.add("edgeSetInputs")
+    assert not hasattr(features.filletFeatures.createInput(), "edgeSetInputs")
+
+
 def test_add_returns_c03_feature_with_health_and_timeline() -> None:
     design = fake_feature_design()
     root = design.rootComponent

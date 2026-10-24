@@ -24,7 +24,10 @@ Builds on the c03 fakes (``tests/fakes/brep.py``: ``FakeComponent``, ``FakeBody`
 - ``install_features(component, design, omit=())`` hangs ``component.features`` with all
   collections (``omit`` drops some, e.g. ``ribFeatures`` of an older Fusion API) and
   ``createPath`` (-> ``FakePath``, recorded in ``features.paths``). A loft input comes with
-  ``loftSections`` (``FakeLoftSections``) and a recording ``centerLineOrRails``.
+  ``loftSections`` (``FakeLoftSections``) and a recording ``centerLineOrRails``; a fillet
+  input with ``edgeSetInputs`` and a ``createInput2`` chamfer input with ``chamferEdgeSets``
+  (``edge_set_container``: each ``add*`` returns a recording edge set). A collection's
+  ``on_input(inp)`` hook runs on every new input (e.g. ``inp.missing.add(...)``).
 - ``make_ctx(design, params, refs)`` is a ``Context`` over a fake app whose ref resolver
   first looks refs up in ``refs`` (ref -> entity, for entities without a token of their own),
   then in the design, and records every resolved ref.
@@ -193,6 +196,9 @@ class FakeFeatureCollection(FakeCollection):
         self.message = ""
         self.add_error: str | None = None
         self.create_error: str | None = None
+        # Called with every new input after its sub-objects are made (e.g. to mark names
+        # ``missing`` and test a fallback for an older Fusion API).
+        self.on_input: Callable[[FakeFeatureInput], None] | None = None
         self._created: list[tuple[FakeBody, Any]] = []
         self._modified: list[FakeBody] = []
         self._removed: list[FakeBody] = []
@@ -451,11 +457,42 @@ def cylinder_face(
     return face
 
 
+def edge_set_container(name: str) -> FakeFeatureInput:
+    """``FilletFeatureInput.edgeSetInputs`` / ``ChamferFeatureInput.chamferEdgeSets``: every
+    ``add*`` call is recorded and returns a new recording edge set (``create_method`` = the
+    call, ``create_args`` = its arguments); ``edge_sets`` lists them in order."""
+    container = FakeFeatureInput(None, name)
+    made: list[FakeFeatureInput] = []
+    container.provide("edge_sets", made)
+    for method in (
+        "addConstantRadiusEdgeSet",
+        "addVariableRadiusEdgeSet",
+        "addChordLengthEdgeSet",
+        "addEqualDistanceChamferEdgeSet",
+        "addTwoDistancesChamferEdgeSet",
+        "addDistanceAndAngleChamferEdgeSet",
+    ):
+
+        def add(*args: Any, _method: str = method) -> FakeFeatureInput:
+            edge_set = FakeFeatureInput(None, _method, args)
+            made.append(edge_set)
+            return edge_set
+
+        container.returns[method] = add
+    return container
+
+
 def _prepare_input(collection: FakeFeatureCollection, method: str, inp: FakeFeatureInput) -> None:
     """Sub-objects a real input has right after creation (not logged as sets)."""
     if collection.kind == "LoftFeature" and method == "createInput":
         inp.provide("loftSections", FakeLoftSections())
         inp.provide("centerLineOrRails", FakeFeatureInput(None, "centerLineOrRails"))
+    if collection.kind == "FilletFeature" and method == "createInput":
+        inp.provide("edgeSetInputs", edge_set_container("edgeSetInputs"))
+    if collection.kind == "ChamferFeature" and method == "createInput2":
+        inp.provide("chamferEdgeSets", edge_set_container("chamferEdgeSets"))
+    if collection.on_input is not None:
+        collection.on_input(inp)
 
 
 class FakeFeatures:

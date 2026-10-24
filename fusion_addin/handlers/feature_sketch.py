@@ -134,11 +134,17 @@ def _parametric(ctx: Any) -> bool:
         return True
 
 
-def _finish(ctx: Any, feature: Any, before: BodySnapshot, operation: str) -> dict[str, Any]:
-    """D8 result; on failure a direct design (no timeline rollback, c02 D5) loses the feature
-    here."""
+def _finish(
+    ctx: Any,
+    feature: Any,
+    before: BodySnapshot,
+    operation: str | None,
+    touched: Any = (),
+) -> dict[str, Any]:
+    """D8 result (``touched``: bodies a modifier changed); on failure a direct design (no
+    timeline rollback, c02 D5) loses the feature here."""
     try:
-        return feature_result(ctx, feature, before, operation=operation)
+        return feature_result(ctx, feature, before, touched, operation=operation)
     except Exception:
         if feature is not None and not _parametric(ctx):
             with contextlib.suppress(Exception):

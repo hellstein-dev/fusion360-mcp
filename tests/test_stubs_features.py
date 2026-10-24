@@ -32,6 +32,10 @@ def test_feature_enums_import_with_distinct_values() -> None:
             "SweepProfileNoScalingOption",
         ),
         F.ThreadLocations: ("HighEndThreadLocation", "LowEndThreadLocation"),
+        F.RuleFilletTopologyTypes: (
+            "AllEdgesRuleFilletTopologyType",
+            "BetweenFacesRuleFilletTopologyType",
+        ),
     }
     for enum, names in expected.items():
         values = [getattr(enum, name) for name in names]

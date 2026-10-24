@@ -41,6 +41,11 @@ HOLE_EXTENT_TYPES = ("distance", "through_all", "to_entity")
 THREAD_LOCATIONS = ("high", "low")
 # Thread type Fusion offers by default for metric threads; designations stay strings.
 DEFAULT_THREAD_TYPE = "ISO Metric profile"
+# Fillet, rule fillet (D17) and chamfer (D18).
+FILLET_MODES = ("constant", "variable", "chord")
+FILLET_CORNERS = ("rolling_ball", "setback")
+RULE_FILLET_RULES = ("all_edges", "between_faces")
+CHAMFER_MODES = ("equal", "two_distances", "distance_angle")
 
 
 def check_choice(name: str, value: Any, choices: Sequence[str]) -> str:

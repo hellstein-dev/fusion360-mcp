@@ -45,6 +45,10 @@ def dumped(tp: Any, value: Any) -> Any:
         (m.HealthState, vocab.HEALTH_STATES),
         (m.HoleKind, vocab.HOLE_KINDS),
         (m.ThreadLocation, vocab.THREAD_LOCATIONS),
+        (m.FilletMode, vocab.FILLET_MODES),
+        (m.FilletCorner, vocab.FILLET_CORNERS),
+        (m.RuleFilletRule, vocab.RULE_FILLET_RULES),
+        (m.ChamferMode, vocab.CHAMFER_MODES),
     ],
 )
 def test_literals_match_protocol_tuples(literal: Any, values: tuple[str, ...]) -> None:

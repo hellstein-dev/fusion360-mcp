@@ -96,6 +96,11 @@ class ThreadLocations:
     LowEndThreadLocation = 1
 
 
+class RuleFilletTopologyTypes:
+    AllEdgesRuleFilletTopologyType = 0
+    BetweenFacesRuleFilletTopologyType = 1
+
+
 # --- extent and start definitions -------------------------------------------------------------
 
 

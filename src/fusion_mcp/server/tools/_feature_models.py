@@ -36,6 +36,10 @@ SweepOrientation = Literal["perpendicular", "parallel"]
 RailScaling = Literal["scale", "stretch", "none"]
 RibThicknessLocation = Literal["symmetric", "side1", "side2"]
 HoleKind = Literal["simple", "counterbore", "countersink"]
+FilletMode = Literal["constant", "variable", "chord"]
+FilletCorner = Literal["rolling_ball", "setback"]
+RuleFilletRule = Literal["all_edges", "between_faces"]
+ChamferMode = Literal["equal", "two_distances", "distance_angle"]
 
 DEFAULT_THREAD_TYPE = PROTOCOL_DEFAULT_THREAD_TYPE
 DEFAULT_TIP_ANGLE = 118.0

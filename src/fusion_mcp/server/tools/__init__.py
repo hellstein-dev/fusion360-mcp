@@ -5,6 +5,7 @@ from . import (
     design,
     document,
     feature_hole,
+    feature_modify,
     feature_sketch,
     inspect,
     measure,
@@ -28,6 +29,7 @@ TOOL_MODULES = [
     construction,
     feature_sketch,
     feature_hole,
+    feature_modify,
 ]
 
 __all__ = [
@@ -36,6 +38,7 @@ __all__ = [
     "design",
     "document",
     "feature_hole",
+    "feature_modify",
     "feature_sketch",
     "inspect",
     "measure",
