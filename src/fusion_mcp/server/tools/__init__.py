@@ -15,6 +15,7 @@ from . import (
     script,
     sketch,
     status,
+    timeline,
     viewport,
 )
 
@@ -34,6 +35,7 @@ TOOL_MODULES = [
     feature_modify,
     pattern,
     body,
+    timeline,
 ]
 
 __all__ = [
@@ -52,5 +54,6 @@ __all__ = [
     "script",
     "sketch",
     "status",
+    "timeline",
     "viewport",
 ]

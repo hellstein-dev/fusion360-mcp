@@ -16,6 +16,7 @@ from . import (
     script,
     sketch,
     status,
+    timeline,
     viewport,
 )
 
@@ -35,5 +36,6 @@ __all__ = [
     "script",
     "sketch",
     "status",
+    "timeline",
     "viewport",
 ]
