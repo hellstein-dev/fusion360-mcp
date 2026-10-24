@@ -89,7 +89,8 @@ def test_occ_describes_with_light_bulb_and_joint_count(asm: Any) -> None:
     out = assembly._occ(make_ctx(asm), asm.box)
     assert out["type"] == "Occurrence"
     assert out["full_path_name"] == "Box:1"
-    assert out["component"] == asm.box.component.entityToken
+    assert out["ref"] == "occurrence:Box:1"
+    assert out["component"] == "component:Box"
     assert out["transform"]["translation_mm"] == [0.0, 0.0, 0.0]
     assert out["is_light_bulb_on"] is False
     assert out["joint_count"] == 2

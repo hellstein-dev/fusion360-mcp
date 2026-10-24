@@ -67,6 +67,7 @@ class FakeOccurrences(FakeCollection):
         index = 1 + sum(1 for o in self if o.component is component)
         occurrence = FakeOccurrence(component, None, transform=transform.copy(), index=index)
         self.add(occurrence)
+        make_activatable(self.design, occurrence)
         if self.owner is root:
             root.allOccurrences.add(occurrence)
         else:
@@ -74,6 +75,7 @@ class FakeOccurrences(FakeCollection):
             for parent in list(root.allOccurrences):
                 if parent.component is self.owner:
                     copy = occurrence.createForAssemblyContext(parent)
+                    make_activatable(self.design, copy)
                     parent.childOccurrences.add(copy)
                     root.allOccurrences.add(copy)
         return occurrence
@@ -130,17 +132,66 @@ def add_component(
 
 
 def fake_assembly_design(*bodies: Any, parametric: bool = True) -> Any:
-    """``fake_part_design`` with ``FakeOccurrences`` on root, ``snapshots`` and
-    ``activateRootComponent``."""
+    """``fake_part_design`` with ``FakeOccurrences`` on root, ``snapshots``,
+    ``activeOccurrence`` and ``activateRootComponent``."""
     design = fake_part_design(*bodies, parametric=parametric)
     root = design.rootComponent
     root.occurrences = FakeOccurrences(root, design)
     design.add_entity(root)
     design.snapshots = FakeSnapshots()  # type: ignore[attr-defined]
+    design.activeOccurrence = None  # type: ignore[attr-defined]
     design.activateRootComponent = lambda: _activate_root(design)  # type: ignore[attr-defined]
     return design
 
 
 def _activate_root(design: FakeDesign) -> bool:
     design.activeComponent = None
+    design.activeOccurrence = None  # type: ignore[attr-defined]
     return True
+
+
+def make_activatable(design: FakeDesign, occurrence: FakeOccurrence) -> None:
+    """``occurrence.activate()`` makes it the design's active occurrence/component."""
+
+    def activate() -> bool:
+        occurrence.activations += 1
+        design.activeComponent = occurrence.component
+        design.activeOccurrence = occurrence  # type: ignore[attr-defined]
+        return True
+
+    occurrence.activate = activate  # type: ignore[method-assign]
+
+
+def _move_body(body: Any, target: FakeComponent) -> None:
+    owner = body.parentComponent
+    owner.bRepBodies._items.remove(body)
+    target.add_body(body)
+
+
+def make_movable(design: FakeDesign, body: Any, create_returns: str | None = "body") -> None:
+    """``BRepBody.createComponent()`` / ``moveToComponent(occurrence)`` on ``body``.
+
+    ``createComponent`` inserts a new component into the body's owner and moves the body
+    there; it returns the moved body as a proxy (``"body"``) or the new occurrence
+    (``"occurrence"``); ``None`` leaves the method out (old Fusion versions).
+    """
+
+    def move_to_component(occurrence: Any) -> Any:
+        body.move_calls = getattr(body, "move_calls", 0) + 1
+        _move_body(body, occurrence.component)
+        return body.createForAssemblyContext(occurrence)
+
+    def create_component() -> Any:
+        import fusion_addin
+
+        owner = body.parentComponent
+        matrix = fusion_addin.adsk.core.Matrix3D.create()
+        occurrence = owner.occurrences.addNewComponent(matrix)
+        _move_body(body, occurrence.component)
+        if create_returns == "occurrence":
+            return occurrence
+        return body.createForAssemblyContext(occurrence)
+
+    body.moveToComponent = move_to_component
+    if create_returns is not None:
+        body.createComponent = create_component

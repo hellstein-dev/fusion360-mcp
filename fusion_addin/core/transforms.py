@@ -1,4 +1,4 @@
-"""Transforms of ``body.move`` (c08 D8).
+"""Transforms of ``body.move`` (c08 D8) and occurrence placements (c10 D3).
 
 - ``move_plan(ctx, spec, units)`` validates a transform spec, resolves its refs and builds
   every Fusion value (``ValueInput``, ``Matrix3D``) without touching the design: the
@@ -11,6 +11,11 @@
   Only transforms that can be computed here (``translate`` with numbers in model space,
   ``rotate_about``, ``align`` of two points, ``matrix``); anything else, Fusion expressions
   included, is ``FUSION_API_ERROR`` "not available".
+
+- ``placement_matrix(origin_mm, x_axis, y_axis)`` / ``relative_matrix(current, translate_mm,
+  rotate)`` - occurrence ``transform2`` values (c10 D3): an absolute placement by origin and
+  axes (``setWithCoordinateSystem``), or the current transform followed by a rotation about
+  an axis and a translation (``transformBy`` in that order), both in assembly space.
 
 Lengths are numbers in ``units`` (default ``ctx.units``) or expressions, angles degrees;
 conversion goes through ``fusion_mcp.protocol.units`` / ``core.features`` only (INV-6).
@@ -26,7 +31,12 @@ import adsk.core
 
 from fusion_mcp.protocol.errors import BridgeError, ErrorCode
 from fusion_mcp.protocol.features import MOVE_TYPES, check_choice
-from fusion_mcp.protocol.units import Units, angle_to_internal, length_to_internal
+from fusion_mcp.protocol.units import (
+    Units,
+    angle_to_internal,
+    length_to_internal,
+    point_to_internal,
+)
 
 from .entity_kinds import describe_kind, is_linear, is_point
 from .features import angle_value, length_value, point3d
@@ -312,3 +322,85 @@ def matrix_for(ctx: Any, spec: Any, units: Any = None, param: str = "transform")
         )
         return matrix
     raise _not_available(f"Move type '{plan.type}' without MoveFeatures.createInput2 is")
+
+
+# --- occurrence placements (c10 D3) ---------------------------------------------------------
+
+_ROTATE_FIELDS = frozenset({"axis", "angle_deg", "origin_mm"})
+
+
+def _numbers3(value: Any, param: str) -> list[float]:
+    if not isinstance(value, list | tuple) or len(value) != 3 or not all(map(_number, value)):
+        raise _invalid(f"parameter '{param}' must be [x, y, z] numbers", param=param)
+    return [float(v) for v in value]
+
+
+def _point_cm3(value: Any, param: str) -> Any:
+    return adsk.core.Point3D.create(*point_to_internal(_numbers3(value, param)))
+
+
+def _unit_vector(value: Any, param: str) -> list[float]:
+    xyz = _numbers3(value, param)
+    length = math.hypot(*xyz)
+    if length == 0:
+        raise _invalid(f"parameter '{param}' must not be the zero vector", param=param)
+    return [c / length for c in xyz]
+
+
+def placement_matrix(origin_mm: Any, x_axis: Any, y_axis: Any, param: str = "absolute") -> Any:
+    """Absolute ``Matrix3D`` (cm): origin in mm, axes normalised, ``z = x cross y``; axes that are
+    not perpendicular (|x·y| > ``ORTHONORMAL_TOLERANCE``) are ``INVALID_PARAMS``."""
+    origin = _point_cm3(origin_mm, f"{param}.origin_mm")
+    x = _unit_vector(x_axis, f"{param}.x_axis")
+    y = _unit_vector(y_axis, f"{param}.y_axis")
+    dot = sum(a * b for a, b in zip(x, y, strict=True))
+    if abs(dot) > ORTHONORMAL_TOLERANCE:
+        raise _invalid(
+            f"parameter '{param}': x_axis and y_axis must be perpendicular (dot = {dot:.6g})",
+            param=param,
+            reason="not_orthogonal",
+        )
+    z = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]]
+    matrix = adsk.core.Matrix3D.create()
+    vectors = (adsk.core.Vector3D.create(*v) for v in (x, y, z))
+    if not matrix.setWithCoordinateSystem(origin, *vectors):
+        raise _invalid(f"parameter '{param}' was refused by Fusion", param=param)
+    return matrix
+
+
+def rotation_matrix(rotate: Any, param: str = "rotate") -> Any:
+    """``{"axis", "angle_deg", "origin_mm" = [0, 0, 0]}`` -> rotation ``Matrix3D`` (cm)."""
+    if not isinstance(rotate, dict):
+        raise _invalid(
+            f"parameter '{param}' must be an object with 'axis' and 'angle_deg'", param=param
+        )
+    unknown = sorted(set(rotate) - _ROTATE_FIELDS)
+    if unknown:
+        raise _invalid(f"parameter '{param}' has unknown fields {unknown}", param=param)
+    axis = _unit_vector(rotate.get("axis"), f"{param}.axis")
+    angle: Any = rotate.get("angle_deg")
+    if not _number(angle):
+        raise _invalid(
+            f"parameter '{param}.angle_deg' must be a number", param=f"{param}.angle_deg"
+        )
+    origin_mm = rotate.get("origin_mm")
+    origin = _point_cm3([0, 0, 0] if origin_mm is None else origin_mm, f"{param}.origin_mm")
+    matrix = adsk.core.Matrix3D.create()
+    radians = float(angle_to_internal(float(angle)))
+    if not matrix.setToRotation(radians, adsk.core.Vector3D.create(*axis), origin):
+        raise _invalid(f"parameter '{param}' is not a valid rotation", param=param)
+    return matrix
+
+
+def relative_matrix(current: Any, translate_mm: Any = None, rotate: Any = None) -> Any:
+    """``current`` followed by ``rotate`` (about an axis through ``origin_mm``) and then
+    ``translate_mm``, all in assembly space; ``current`` is not modified."""
+    matrix = current.copy()
+    if rotate is not None:
+        matrix.transformBy(rotation_matrix(rotate))
+    if translate_mm is not None:
+        shift = adsk.core.Matrix3D.create()
+        cm = point_to_internal(_numbers3(translate_mm, "translate_mm"))
+        shift.translation = adsk.core.Vector3D.create(*cm)
+        matrix.transformBy(shift)
+    return matrix

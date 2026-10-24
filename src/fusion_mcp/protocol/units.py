@@ -64,6 +64,14 @@ def length_to_internal(value: Length, units: str = DEFAULT_LENGTH_UNIT) -> float
     return _number(value) * _cm_per(units)
 
 
+def point_to_internal(xyz: Sequence[float], units: str = DEFAULT_LENGTH_UNIT) -> list[float]:
+    """Point ``[x, y, z]`` in ``units`` (default mm) -> cm. Directions are unitless and are
+    never converted (c10 D3)."""
+    if isinstance(xyz, str) or len(xyz) != 3:
+        raise ValueError(f"expected [x, y, z], got {xyz!r}")
+    return [_number(c) * _cm_per(units) for c in xyz]
+
+
 def area_to_internal(value: float, units: str = DEFAULT_LENGTH_UNIT) -> float:
     return _number(value) * _cm_per(units) ** 2
 
