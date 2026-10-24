@@ -121,6 +121,15 @@ ComponentRef = Annotated[
     ),
 ]
 Name = Annotated[str, Field(min_length=1, description="Component name (unique in the design)")]
+JointRef = Annotated[
+    str, Field(min_length=1, description="Joint or as-built joint ref (assembly_list_joints)")
+]
+Length = Annotated[Number | str, Field(description="mm number or Fusion expression ('5 mm')")]
+Angle = Annotated[Number | str, Field(description="Degrees number or Fusion expression")]
+LimitValue = Annotated[
+    Number | Literal["off"] | None,
+    Field(description='Limit in degrees (rotations) or mm (slides); "off" disables it'),
+]
 TranslateMm = Annotated[
     list[Number] | None,
     Field(min_length=3, max_length=3, description="[dx, dy, dz] in mm, in assembly space"),
@@ -360,3 +369,191 @@ def register(mcp: MCPServer[Any], bridge: Bridge) -> None:
         "type": "Occurrence"}}.
         """
         return await call_bridge(bridge, "assembly.delete", {"item": item})
+
+    # --- joint origins and joints -------------------------------------------------------------
+
+    @mcp.tool(name="assembly_create_joint_origin")
+    async def assembly_create_joint_origin(
+        geometry: Annotated[
+            JointGeometry, Field(description="Where the origin snaps (kind joint_origin refused)")
+        ],
+        name: Annotated[str | None, Field(min_length=1, description="Joint origin name")] = None,
+        offset_mm: Annotated[
+            list[Length] | None,
+            Field(
+                min_length=3,
+                max_length=3,
+                description="[x, y, z] offset of the origin along its own axes: mm numbers or "
+                "Fusion expressions",
+            ),
+        ] = None,
+        angle: Annotated[
+            Angle | None, Field(description="Rotation about the origin's Z: degrees or expression")
+        ] = None,
+        flip: Annotated[bool, Field(description="Flip the origin's Z axis")] = False,
+    ) -> CallToolResult:
+        """Create a joint origin: a reusable snap point for joints, stored in the component
+        that owns the geometry (so it moves with the part). Geometry refs seen through an
+        occurrence ('<token>@Lid:1') are fine: the origin is still created in component Lid.
+        Use it later as {"kind": "joint_origin", "entity": <ref>} in assembly_create_joint.
+
+        Returns {"joint_origin": {"ref" (in the occurrence context, '<token>@<path>', when
+        the component has one), "native_ref" (inside the component), "name", "component":
+        "component:<name>"}}.
+
+        Example: assembly_create_joint_origin(geometry={"kind": "planar_face", "entity":
+        "Fc=@Lid:1", "key_point": "center"}, offset_mm=[0, 0, 5]) -> {"joint_origin": {"ref":
+        "Jo=@Lid:1", "native_ref": "Jo=", "name": "Joint Origin1", "component":
+        "component:Lid"}}.
+        """
+        params = _given(
+            geometry=_dump(geometry), name=name, offset_mm=offset_mm, angle=angle, flip=flip
+        )
+        return await call_bridge(bridge, "assembly.create_joint_origin", params)
+
+    @mcp.tool(name="assembly_create_joint")
+    async def assembly_create_joint(
+        type: Annotated[JointType, Field(description="Joint type (degrees of freedom)")],
+        geometry_one: Annotated[
+            JointGeometry, Field(description="Snap on the MOVING part (it moves to geometry_two)")
+        ],
+        geometry_two: Annotated[JointGeometry, Field(description="Snap on the part it joins")],
+        motion: Annotated[
+            dict[str, str] | None,
+            Field(description="Motion axes of the type; values 'x'|'y'|'z' or a ref, see below"),
+        ] = None,
+        offset: Annotated[
+            Length | None, Field(description="Offset along the joint Z: mm number or expression")
+        ] = None,
+        angle: Annotated[
+            Angle | None, Field(description="Rotation about the joint Z: degrees or expression")
+        ] = None,
+        flip: Annotated[bool, Field(description="Flip the direction of geometry_one")] = False,
+        name: Annotated[str | None, Field(min_length=1, description="Joint name")] = None,
+    ) -> CallToolResult:
+        """Join two parts with a joint (created in the root component): geometry_one's part
+        moves so its snap point lands on geometry_two's.
+
+        Getting refs: call inspect_query(kind="edge" or "face", scope=["occurrence:Lid:1"])
+        and use the returned refs; entities inside occurrences look like '<token>@<occurrence
+        path>' (e.g. 'AbC=@Lid:1'). A native ref of a component inserted once is accepted;
+        if inserted several times you get INVALID_PARAMS with the candidate refs.
+
+        motion keys per type (default in brackets; 'x'|'y'|'z' are axes of the joint, a ref
+        of an edge/axis/face sets a custom direction): rigid - none; revolute - axis [z];
+        slider - direction [z]; cylindrical - axis [z]; pin_slot - axis [z],
+        slide_direction [x]; planar - normal [z], primary_slide_direction (ref); ball -
+        pitch_direction [z], yaw_direction [x]. For a hinge pass the hinge edge as the axis.
+
+        Returns {"joint": {"ref", "name", "type", "occurrence_one", "occurrence_two",
+        "values": {"rotation_deg" | "slide_mm" | ...}, "limits": {dof: {"min", "max",
+        "rest"}}, "is_suppressed", "health", "message"}}. Nothing is left on failure.
+
+        Example: assembly_create_joint(type="revolute", geometry_one={"kind": "curve",
+        "entity": "E1=@Lid:1"}, geometry_two={"kind": "curve", "entity": "E2=@Box:1"},
+        motion={"axis": "E2=@Box:1"}) -> {"joint": {"type": "revolute", "values":
+        {"rotation_deg": 0.0}, "occurrence_one": "occurrence:Lid:1", ...}}.
+        """
+        params = _given(
+            type=type,
+            geometry_one=_dump(geometry_one),
+            geometry_two=_dump(geometry_two),
+            motion=motion,
+            offset=offset,
+            angle=angle,
+            flip=flip,
+            name=name,
+        )
+        return await call_bridge(bridge, "assembly.create_joint", params)
+
+    @mcp.tool(name="assembly_create_as_built_joint")
+    async def assembly_create_as_built_joint(
+        type: Annotated[JointType, Field(description="Joint type (degrees of freedom)")],
+        occurrence_one: OccurrenceRef,
+        occurrence_two: OccurrenceRef,
+        geometry: Annotated[
+            JointGeometry | None,
+            Field(description="Joint position/axis; required for every type except rigid"),
+        ] = None,
+        motion: Annotated[
+            dict[str, str] | None,
+            Field(description="Motion axes, same keys as assembly_create_joint"),
+        ] = None,
+        name: Annotated[str | None, Field(min_length=1, description="Joint name")] = None,
+    ) -> CallToolResult:
+        """Join two occurrences where they already are (nothing moves), in the root
+        component. geometry gives the joint position and axis (required except for rigid;
+        refs inside occurrences look like '<token>@<path>'). motion keys as in
+        assembly_create_joint.
+
+        Returns {"joint": joint object as in assembly_create_joint}.
+
+        Example: assembly_create_as_built_joint(type="revolute",
+        occurrence_one="occurrence:Lid:1", occurrence_two="occurrence:Box:1",
+        geometry={"kind": "curve", "entity": "E2=@Box:1"}) -> {"joint": {"type": "revolute",
+        ...}}.
+        """
+        params = _given(
+            type=type,
+            occurrence_one=occurrence_one,
+            occurrence_two=occurrence_two,
+            geometry=_dump(geometry),
+            motion=motion,
+            name=name,
+        )
+        return await call_bridge(bridge, "assembly.create_as_built_joint", params)
+
+    # --- limits and driving ---------------------------------------------------------------------
+
+    @mcp.tool(name="assembly_set_joint_limits")
+    async def assembly_set_joint_limits(
+        joint: JointRef,
+        dof: Annotated[Dof, Field(description="Degree of freedom of the joint's type")],
+        min: LimitValue = None,
+        max: LimitValue = None,
+        rest: LimitValue = None,
+    ) -> CallToolResult:
+        """Set the motion limits of one degree of freedom: rotation/pitch/yaw/roll in
+        degrees, slide/primary_slide/secondary_slide in mm. A number enables the limit,
+        "off" disables it, omitted keeps it. dof must exist for the joint type (revolute:
+        rotation; slider: slide; cylindrical/pin_slot: rotation, slide; planar:
+        primary_slide, secondary_slide, rotation; ball: pitch, yaw, roll), and min must not
+        exceed max, otherwise INVALID_PARAMS.
+
+        Returns {"joint": joint object (see assembly_create_joint) with "limits"}.
+
+        Example: assembly_set_joint_limits(joint="Jt=", dof="rotation", min=0, max=110) ->
+        {"joint": {"limits": {"rotation": {"min": 0.0, "max": 110.0, "rest": null}}, ...}}.
+        """
+        params = _given(joint=joint, dof=dof, min=min, max=max, rest=rest)
+        return await call_bridge(bridge, "assembly.set_joint_limits", params)
+
+    @mcp.tool(name="assembly_drive_joint")
+    async def assembly_drive_joint(
+        joint: JointRef,
+        values: Annotated[
+            dict[Dof, Number],
+            Field(
+                min_length=1,
+                description="Target value per degree of freedom: degrees for rotation/pitch/"
+                "yaw/roll, mm for slides",
+            ),
+        ],
+        capture_position: Annotated[
+            bool, Field(description="Fix the new position with a timeline 'Position' snapshot")
+        ] = True,
+    ) -> CallToolResult:
+        """Move a joint to the given values (e.g. open a hinge to 90 degrees). Fusion keeps
+        values inside the joint limits: dofs whose actual value differs from the request
+        are listed in "clamped" (the actual value is in joint.values). Values are restored
+        if Fusion fails.
+
+        Returns {"joint": joint object (see assembly_create_joint), "requested": {dof:
+        value}, "clamped": [dof], "captured": bool}.
+
+        Example: assembly_drive_joint(joint="Jt=", values={"rotation": 90}) -> {"joint":
+        {"values": {"rotation_deg": 90.0}, ...}, "requested": {"rotation": 90.0},
+        "clamped": [], "captured": true}.
+        """
+        params = {"joint": joint, "values": values, "capture_position": capture_position}
+        return await call_bridge(bridge, "assembly.drive_joint", params)

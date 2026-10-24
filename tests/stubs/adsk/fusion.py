@@ -192,3 +192,66 @@ class EntityStartDefinition(_Definition):
         definition.entity = entity
         definition.offset = offset
         return definition
+
+
+# --- joints (c10 D9) ----------------------------------------------------------------------------
+
+
+class JointTypes:
+    RigidJointType = 0
+    RevoluteJointType = 1
+    SliderJointType = 2
+    CylindricalJointType = 3
+    PinSlotJointType = 4
+    PlanarJointType = 5
+    BallJointType = 6
+
+
+class JointDirections:
+    XAxisJointDirection = 0
+    YAxisJointDirection = 1
+    ZAxisJointDirection = 2
+    CustomJointDirection = 3
+
+
+class JointKeyPointTypes:
+    StartKeyPoint = 0
+    MiddleKeyPoint = 1
+    EndKeyPoint = 2
+    CenterKeyPoint = 3
+
+
+class JointGeometry:
+    """``JointGeometry``: each ``createBy*`` factory keeps its name in ``method`` and its
+    positional arguments in ``args`` (an entity that cannot snap may be set to raise by
+    giving it ``joint_geometry_error``)."""
+
+    objectType = "adsk::fusion::JointGeometry"
+
+    def __init__(self, method: str, *args: Any) -> None:
+        self.method = method
+        self.args = args
+        for arg in args:
+            error = getattr(arg, "joint_geometry_error", None)
+            if error:
+                raise RuntimeError(error)
+
+    @staticmethod
+    def createByPoint(point: Any) -> "JointGeometry":
+        return JointGeometry("createByPoint", point)
+
+    @staticmethod
+    def createByPlanarFace(face: Any, edge: Any, keyPointType: int) -> "JointGeometry":
+        return JointGeometry("createByPlanarFace", face, edge, keyPointType)
+
+    @staticmethod
+    def createByNonPlanarFace(face: Any, keyPointType: int) -> "JointGeometry":
+        return JointGeometry("createByNonPlanarFace", face, keyPointType)
+
+    @staticmethod
+    def createByCurve(curve: Any, keyPointType: int) -> "JointGeometry":
+        return JointGeometry("createByCurve", curve, keyPointType)
+
+    @staticmethod
+    def createByProfile(profile: Any, curve: Any, keyPointType: int) -> "JointGeometry":
+        return JointGeometry("createByProfile", profile, curve, keyPointType)

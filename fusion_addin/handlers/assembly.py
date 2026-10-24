@@ -17,13 +17,24 @@ from typing import Any
 import adsk.core
 import adsk.fusion
 
+from fusion_mcp.protocol.assembly import (
+    DOF_ATTRS,
+    DOFS_BY_TYPE,
+    ROTATIONAL_DOFS,
+    check_dof,
+    check_joint_type,
+    parse_joint_geometry,
+    parse_motion,
+    value_key,
+)
 from fusion_mcp.protocol.errors import BridgeError, ErrorCode
 from fusion_mcp.protocol.refs import with_context
-from fusion_mcp.protocol.units import point_to_internal
+from fusion_mcp.protocol.units import USER_ROUND_DIGITS, point_to_internal
 
-from ..core import refs, transforms
+from ..core import features, jointgeo, refs, transforms
 from ..core.compensate import Compensation
 from ..core.describe import describe
+from ..core.health import check_health, entity_health
 from ..core.registry import handler
 
 
@@ -53,32 +64,8 @@ def _owner_component(entity: Any) -> Any:
 
 
 def _in_root_context(ctx: Any, entity: Any) -> Any:
-    """``entity`` as root-context geometry (D2).
-
-    Proxies, occurrences and entities owned by root are returned as is. A native entity of
-    another component becomes its proxy through the component's only occurrence; zero or
-    several occurrences -> ``INVALID_PARAMS`` with ``details.candidates``.
-    """
-    if refs.assembly_context(entity) is not None or refs.type_name(entity) == "Occurrence":
-        return entity
-    owner = _owner_component(entity)
-    root = ctx.root
-    if owner is None or refs.same_entity(owner, root):
-        return entity
-    found = [
-        o for o in _items(root.allOccurrences) if refs.same_entity(_safe(o, "component"), owner)
-    ]
-    if len(found) == 1:
-        return entity.createForAssemblyContext(found[0])
-    inner = refs.to_ref(entity)
-    candidates = [with_context(inner, o.fullPathName) for o in found]
-    raise _invalid(
-        f"ambiguous assembly context: component {owner.name!r} has {len(found)} occurrences; "
-        "pass the ref in an occurrence context ('<ref>@<occurrence path>')",
-        ref=inner,
-        component=owner.name,
-        candidates=candidates,
-    )
+    """``entity`` as root-context geometry (D2); see ``core/jointgeo.py: in_root_context``."""
+    return jointgeo.in_root_context(ctx, entity)
 
 
 def _all_joints(design: Any) -> Iterator[Any]:
@@ -552,3 +539,361 @@ def assembly_delete(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     if entity.deleteMe() is False:
         raise _api_error(f"Fusion did not delete {kind} {name!r}", item=ref)
     return {"deleted": {"name": name, "type": kind}}
+
+
+# --- 4. joints: outward form (D8) --------------------------------------------------------------
+
+JOINT_KINDS = ("Joint", "AsBuiltJoint")
+# ``(response key, enabled attribute, value attribute)`` of ``JointLimits``.
+LIMIT_FIELDS = (
+    ("min", "isMinimumValueEnabled", "minimumValue"),
+    ("max", "isMaximumValueEnabled", "maximumValue"),
+    ("rest", "isRestValueEnabled", "restValue"),
+)
+CLAMP_TOLERANCE = 1e-6  # internal units (cm / radians)
+
+
+def _dof_in(ctx: Any, dof: str, value: float) -> float:
+    """A dof value from the agent (degrees / mm) -> internal units (radians / cm)."""
+    converted = ctx.units.angle(value) if dof in ROTATIONAL_DOFS else ctx.units.length(value)
+    return float(converted)
+
+
+def _dof_out(ctx: Any, dof: str, internal: float) -> float:
+    """Internal dof value -> degrees / mm, rounded like other inspection output."""
+    value = (
+        ctx.units.angle_out(internal) if dof in ROTATIONAL_DOFS else ctx.units.length_out(internal)
+    )
+    return round(value, USER_ROUND_DIGITS) + 0.0
+
+
+def _joint_type(joint: Any) -> str | None:
+    return jointgeo.joint_type_name(_safe(_safe(joint, "jointMotion"), "jointType"))
+
+
+def _limits(ctx: Any, motion: Any, dof: str) -> dict[str, float | None]:
+    """``{"min", "max", "rest"}`` of a dof in degrees / mm; ``None`` where disabled."""
+    limits = _safe(motion, DOF_ATTRS[dof] + "Limits")
+    result: dict[str, float | None] = {}
+    for key, enabled, value in LIMIT_FIELDS:
+        raw = _safe(limits, value) if _safe(limits, enabled, False) else None
+        result[key] = _dof_out(ctx, dof, raw) if raw is not None else None
+    return result
+
+
+def _joint(ctx: Any, joint: Any) -> dict[str, Any]:
+    """Outward form of a joint or as-built joint (D8): values and limits per dof of its type
+    in degrees / mm, the occurrences it connects, suppression and health."""
+    joint_type = _joint_type(joint)
+    motion = _safe(joint, "jointMotion")
+    values: dict[str, float | None] = {}
+    limits: dict[str, dict[str, float | None]] = {}
+    for dof in DOFS_BY_TYPE.get(joint_type or "", ()):
+        raw = _safe(motion, DOF_ATTRS[dof] + "Value")
+        values[value_key(dof)] = _dof_out(ctx, dof, raw) if raw is not None else None
+        limits[dof] = _limits(ctx, motion, dof)
+    one, two = (_safe(joint, attr) for attr in ("occurrenceOne", "occurrenceTwo"))
+    health = entity_health(joint)
+    return {
+        "ref": refs.to_ref(joint),
+        "name": _safe(joint, "name"),
+        "type": joint_type or "unknown",
+        "occurrence_one": _occurrence_ref(one) if one is not None else None,
+        "occurrence_two": _occurrence_ref(two) if two is not None else None,
+        "values": values,
+        "limits": limits,
+        "is_suppressed": bool(_safe(joint, "isSuppressed", False)),
+        "health": health["state"],
+        "message": health["message"],
+    }
+
+
+def _joint_entity(ctx: Any, ref: Any, param: str = "joint") -> Any:
+    entity = _resolve(ctx, ref, param)
+    kind = refs.type_name(entity)
+    if kind not in JOINT_KINDS:
+        raise _invalid(
+            f"parameter '{param}' must be a joint or as-built joint, got {kind}", param=param
+        )
+    return entity
+
+
+def _typed_joint(ctx: Any, ref: Any) -> tuple[Any, str]:
+    joint = _joint_entity(ctx, ref)
+    joint_type = _joint_type(joint)
+    if joint_type is None:
+        raise _api_error(f"cannot tell the type of joint {_safe(joint, 'name')!r}", joint=ref)
+    return joint, joint_type
+
+
+def _optional_name(ctx: Any, params: dict[str, Any]) -> str | None:
+    name: str | None = ctx.require(params, "name", str, None)
+    if name is not None and not name.strip():
+        raise _invalid("parameter 'name' must not be empty", param="name")
+    return name
+
+
+def _finish(comp: Compensation, created: Any, name: str | None, what: str) -> None:
+    """Register the undo of a newly created object, name it and check its health."""
+    if created is None:
+        raise _api_error(f"Fusion did not create the {what}")
+    comp.add(created.deleteMe, what)
+    if name is not None:
+        created.name = name
+    check_health(created)
+
+
+# --- 5. joint origins ----------------------------------------------------------------------------
+
+
+def _single_occurrence(ctx: Any, component: Any) -> Any:
+    if refs.same_entity(component, ctx.root):
+        return None
+    found = _root_occurrences(ctx, component)
+    return found[0] if len(found) == 1 else None
+
+
+def _joint_origin(ctx: Any, origin: Any, context: Any = None) -> dict[str, Any]:
+    """``{"ref", "native_ref", "name", "component"}``; ``ref`` is in the context of
+    ``context`` (or of the component's only occurrence), else the native ref."""
+    native = refs.native_of(origin)
+    owner = _owner_component(native)
+    native_ref = refs.to_ref(native)
+    if context is None:
+        context = refs.assembly_context(origin)
+    if context is None and owner is not None:
+        context = _single_occurrence(ctx, owner)
+    ref = with_context(native_ref, context.fullPathName) if context is not None else native_ref
+    return {
+        "ref": ref,
+        "native_ref": native_ref,
+        "name": _safe(native, "name"),
+        "component": _component_ref(owner) if owner is not None else None,
+    }
+
+
+def _offsets(ctx: Any, params: dict[str, Any]) -> list[Any] | None:
+    value = ctx.require(params, "offset_mm", list, None)
+    if value is None:
+        return None
+    if len(value) != 3:
+        raise _invalid("parameter 'offset_mm' must be [x, y, z] in mm", param="offset_mm")
+    return [features.length_value(ctx, v, param=f"offset_mm[{i}]") for i, v in enumerate(value)]
+
+
+def _angle(ctx: Any, params: dict[str, Any], key: str = "angle") -> Any:
+    value = params.get(key)
+    return features.angle_value(ctx, value, param=key) if value is not None else None
+
+
+@handler("assembly.create_joint_origin", mutating=True)
+def assembly_create_joint_origin(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    spec = parse_joint_geometry(ctx.require(params, "geometry", dict), "geometry")
+    if spec["kind"] == "joint_origin":
+        raise _invalid(
+            "a joint origin snaps to geometry (point, face, curve, profile), not to another "
+            "joint origin",
+            param="geometry.kind",
+        )
+    name = _optional_name(ctx, params)
+    offsets = _offsets(ctx, params)
+    angle = _angle(ctx, params)
+    flip = ctx.require(params, "flip", bool, False)
+    source = _resolve(ctx, spec["entity"], "geometry.entity")
+    owner = _owner_component(source)
+    if owner is None:
+        raise _invalid("cannot tell which component owns geometry.entity", param="geometry")
+    for key in ("edge", "curve"):
+        if spec[key] is not None:
+            other = _owner_component(_resolve(ctx, spec[key], f"geometry.{key}"))
+            if not refs.same_entity(other, owner):
+                raise _invalid(
+                    f"geometry.{key} must belong to component {owner.name!r} like the entity",
+                    param=f"geometry.{key}",
+                )
+    geometry = jointgeo.build(ctx, spec, "geometry", native=True)
+    origins = owner.jointOrigins
+    origin_input = origins.createInput(geometry)
+    if offsets is not None:
+        origin_input.offsetX, origin_input.offsetY, origin_input.offsetZ = offsets
+    if angle is not None:
+        origin_input.angle = angle
+    if flip:
+        origin_input.isFlipped = True
+    with Compensation() as comp:
+        origin = origins.add(origin_input)
+        _finish(comp, origin, name, "joint origin")
+        result = {"joint_origin": _joint_origin(ctx, origin, refs.assembly_context(source))}
+    return result
+
+
+# --- 5. joints and as-built joints ---------------------------------------------------------------
+
+
+def _joint_geometry(ctx: Any, params: dict[str, Any], key: str) -> Any:
+    spec = parse_joint_geometry(ctx.require(params, key, dict), key)
+    return jointgeo.build(ctx, spec, key)
+
+
+@handler("assembly.create_joint", mutating=True)
+def assembly_create_joint(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    joint_type = check_joint_type(ctx.require(params, "type", str))
+    motion = parse_motion(joint_type, ctx.require(params, "motion", dict, None))
+    offset = params.get("offset")
+    offset_value = (
+        features.length_value(ctx, offset, param="offset") if offset is not None else None
+    )
+    angle = _angle(ctx, params)
+    flip = ctx.require(params, "flip", bool, False)
+    name = _optional_name(ctx, params)
+    one = _joint_geometry(ctx, params, "geometry_one")
+    two = _joint_geometry(ctx, params, "geometry_two")
+    joints = ctx.root.joints
+    joint_input = joints.createInput(one, two)
+    jointgeo.apply_motion(joint_input, joint_type, motion, ctx)
+    if offset_value is not None:
+        joint_input.offset = offset_value
+    if angle is not None:
+        joint_input.angle = angle
+    if flip:
+        joint_input.isFlipped = True
+    with Compensation() as comp:
+        joint = joints.add(joint_input)
+        _finish(comp, joint, name, "joint")
+        result = {"joint": _joint(ctx, joint)}
+    return result
+
+
+@handler("assembly.create_as_built_joint", mutating=True)
+def assembly_create_as_built_joint(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    joint_type = check_joint_type(ctx.require(params, "type", str))
+    motion = parse_motion(joint_type, ctx.require(params, "motion", dict, None))
+    name = _optional_name(ctx, params)
+    one = _occurrence(ctx, ctx.require(params, "occurrence_one", str), "occurrence_one")
+    two = _occurrence(ctx, ctx.require(params, "occurrence_two", str), "occurrence_two")
+    if refs.same_entity(one, two) or one.fullPathName == two.fullPathName:
+        raise _invalid("an as-built joint needs two different occurrences", param="occurrence_two")
+    raw = ctx.require(params, "geometry", dict, None)
+    if raw is None and joint_type != "rigid":
+        raise _invalid(
+            f"parameter 'geometry' is required for a {joint_type} as-built joint "
+            "(only rigid works without it)",
+            param="geometry",
+        )
+    geometry = None
+    if raw is not None:
+        spec = parse_joint_geometry(raw, "geometry")
+        if spec["kind"] == "joint_origin":
+            raise _invalid(
+                "as-built joints snap to geometry (point, face, curve, profile), not to a joint "
+                "origin",
+                param="geometry.kind",
+            )
+        geometry = jointgeo.build(ctx, spec, "geometry")
+    built = ctx.root.asBuiltJoints
+    joint_input = built.createInput(one, two, geometry)
+    jointgeo.apply_motion(joint_input, joint_type, motion, ctx)
+    with Compensation() as comp:
+        joint = built.add(joint_input)
+        _finish(comp, joint, name, "as-built joint")
+        result = {"joint": _joint(ctx, joint)}
+    return result
+
+
+# --- 5. limits and driving -----------------------------------------------------------------------
+
+
+def _number(value: Any, param: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise _invalid(f"parameter '{param}' must be a finite number", param=param)
+    return float(value)
+
+
+def _limit_param(params: dict[str, Any], key: str) -> float | str | None:
+    value = params.get(key)
+    if value is None or value == "off":
+        return value
+    if isinstance(value, str):
+        raise _invalid(f"parameter '{key}' must be a number, \"off\" or null", param=key)
+    return _number(value, key)
+
+
+def _restore_limits(limits: Any) -> Any:
+    saved = [(attr, getattr(limits, attr)) for _, _, attr in LIMIT_FIELDS]
+    saved += [(attr, getattr(limits, attr)) for _, attr, _ in LIMIT_FIELDS]
+
+    def undo() -> None:
+        for attr, value in saved:
+            setattr(limits, attr, value)
+
+    return undo
+
+
+@handler("assembly.set_joint_limits", mutating=True)
+def assembly_set_joint_limits(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    joint, joint_type = _typed_joint(ctx, ctx.require(params, "joint", str))
+    dof = check_dof(joint_type, ctx.require(params, "dof", str))
+    changes = {key: _limit_param(params, key) for key, _, _ in LIMIT_FIELDS}
+    changes = {key: value for key, value in changes.items() if value is not None}
+    if not changes:
+        raise _invalid("nothing to change: pass 'min', 'max' and/or 'rest' (a number or \"off\")")
+    motion = joint.jointMotion
+    merged = _limits(ctx, motion, dof)
+    merged.update({k: None if v == "off" else v for k, v in changes.items()})  # type: ignore[misc]
+    low, high = merged["min"], merged["max"]
+    if low is not None and high is not None and low > high:
+        unit = "degrees" if dof in ROTATIONAL_DOFS else "mm"
+        raise _invalid(
+            f"{dof} limits: min {low} is greater than max {high} ({unit})", min=low, max=high
+        )
+    limits = getattr(motion, DOF_ATTRS[dof] + "Limits")
+    fields = {key: (enabled, value) for key, enabled, value in LIMIT_FIELDS}
+    with Compensation() as comp:
+        comp.add(_restore_limits(limits), f"{dof} limits")
+        for key, change in changes.items():
+            enabled, value = fields[key]
+            if change == "off":
+                setattr(limits, enabled, False)
+                continue
+            setattr(limits, value, _dof_in(ctx, dof, change))  # type: ignore[arg-type]
+            setattr(limits, enabled, True)
+    return {"joint": _joint(ctx, joint)}
+
+
+@handler("assembly.drive_joint", mutating=True)
+def assembly_drive_joint(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
+    joint, joint_type = _typed_joint(ctx, ctx.require(params, "joint", str))
+    values = ctx.require(params, "values", dict)
+    capture = ctx.require(params, "capture_position", bool, True)
+    if not values:
+        raise _invalid("parameter 'values' must set at least one degree of freedom", param="values")
+    requested = {
+        check_dof(joint_type, dof, "values"): _number(value, f"values.{dof}")
+        for dof, value in values.items()
+    }
+    internal = {dof: _dof_in(ctx, dof, value) for dof, value in requested.items()}
+    motion = joint.jointMotion
+    attrs = {dof: DOF_ATTRS[dof] + "Value" for dof in internal}
+    old = {dof: getattr(motion, attr) for dof, attr in attrs.items()}
+
+    def undo() -> None:
+        for dof, value in old.items():
+            if getattr(motion, attrs[dof]) != value:
+                setattr(motion, attrs[dof], value)
+
+    with Compensation() as comp:
+        comp.add(undo, "joint values")
+        for dof, value in internal.items():
+            setattr(motion, attrs[dof], value)
+        clamped = [
+            dof
+            for dof, value in internal.items()
+            if abs(float(getattr(motion, attrs[dof])) - value) > CLAMP_TOLERANCE
+        ]
+        captured = _capture(ctx.design, capture)
+    return {
+        "joint": _joint(ctx, joint),
+        "requested": requested,
+        "clamped": clamped,
+        "captured": captured,
+    }

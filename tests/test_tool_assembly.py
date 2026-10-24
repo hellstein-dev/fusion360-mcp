@@ -198,3 +198,159 @@ def test_assembly_delete() -> None:
     assert bridge.last.params == {"item": "occurrence:Box:2"}
     assert json.loads(result_text(result)) == answer
     rejected("assembly_delete", {"item": ""})
+
+
+# --- 5. joint origins, joints, limits, driving ---------------------------------------------------
+
+JOINT = {"ref": "Jt=", "type": "revolute", "values": {"rotation_deg": 0.0}}
+EDGE_LID = {"kind": "curve", "entity": "E1=@Lid:1"}
+EDGE_BOX = {"kind": "curve", "entity": "E2=@Box:1"}
+
+
+def test_vocabularies_match_protocol() -> None:
+    from typing import get_args
+
+    from fusion_mcp.protocol import assembly as protocol
+    from fusion_mcp.server.tools import assembly as tools
+
+    assert get_args(tools.JointType) == protocol.JOINT_TYPES
+    assert get_args(tools.Dof) == protocol.DOFS
+    assert get_args(tools.JointGeometryKind) == protocol.GEOMETRY_KINDS
+    assert get_args(tools.KeyPoint) == protocol.KEY_POINTS
+
+
+def test_joint_docstrings() -> None:
+    docs = descriptions()
+    text = docs["assembly_create_joint"]
+    assert "inspect_query" in text and "<token>@<occurrence" in text
+    assert "MOVING" in docs["assembly_create_joint"] or "moves" in text
+    assert "clamped" in docs["assembly_drive_joint"]
+    assert '"off"' in docs["assembly_set_joint_limits"]
+
+
+def test_assembly_create_joint_origin() -> None:
+    answer = {"joint_origin": {"ref": "Jo=@Lid:1", "native_ref": "Jo="}}
+    bridge = FakeBridge({"assembly.create_joint_origin": answer})
+    geometry = {"kind": "planar_face", "entity": "F=@Lid:1", "key_point": "center"}
+    result, _ = call(
+        "assembly_create_joint_origin",
+        {"geometry": geometry, "offset_mm": [0, 0, "5 mm"], "angle": 90},
+        bridge,
+    )
+    assert bridge.last.params == {
+        "geometry": geometry,
+        "offset_mm": [0.0, 0.0, "5 mm"],
+        "angle": 90.0,
+        "flip": False,
+    }
+    assert json.loads(result_text(result)) == answer
+    rejected("assembly_create_joint_origin", {"geometry": {"kind": "sphere", "entity": "x"}})
+    rejected(
+        "assembly_create_joint_origin",
+        {"geometry": {"kind": "point", "entity": "v", "key_point": "center"}},
+    )
+
+
+def test_assembly_create_joint() -> None:
+    bridge = FakeBridge({"assembly.create_joint": {"joint": JOINT}})
+    result, _ = call(
+        "assembly_create_joint",
+        {
+            "type": "revolute",
+            "geometry_one": EDGE_LID,
+            "geometry_two": EDGE_BOX,
+            "motion": {"axis": "E2=@Box:1"},
+            "angle": "45 deg",
+        },
+        bridge,
+    )
+    assert bridge.last.method == "assembly.create_joint"
+    assert bridge.last.params == {
+        "type": "revolute",
+        "geometry_one": EDGE_LID,
+        "geometry_two": EDGE_BOX,
+        "motion": {"axis": "E2=@Box:1"},
+        "angle": "45 deg",
+        "flip": False,
+    }
+    assert json.loads(result_text(result)) == {"joint": JOINT}
+    rejected(
+        "assembly_create_joint",
+        {"type": "hinge", "geometry_one": EDGE_LID, "geometry_two": EDGE_BOX},
+    )
+    rejected("assembly_create_joint", {"type": "rigid", "geometry_one": EDGE_LID})
+
+
+def test_assembly_create_joint_error_is_passed_on() -> None:
+    error = BridgeError(ErrorCode.INVALID_PARAMS, "motion: axis not valid for a slider joint")
+    bridge = FakeBridge({"assembly.create_joint": error})
+    result, _ = call(
+        "assembly_create_joint",
+        {
+            "type": "slider",
+            "geometry_one": EDGE_LID,
+            "geometry_two": EDGE_BOX,
+            "motion": {"axis": "x"},
+        },
+        bridge,
+    )
+    assert result.is_error and "slider" in result_text(result)
+
+
+def test_assembly_create_as_built_joint() -> None:
+    bridge = FakeBridge({"assembly.create_as_built_joint": {"joint": JOINT}})
+    call(
+        "assembly_create_as_built_joint",
+        {
+            "type": "rigid",
+            "occurrence_one": "occurrence:Lid:1",
+            "occurrence_two": "occurrence:Box:1",
+        },
+        bridge,
+    )
+    assert bridge.last.params == {
+        "type": "rigid",
+        "occurrence_one": "occurrence:Lid:1",
+        "occurrence_two": "occurrence:Box:1",
+    }
+    call(
+        "assembly_create_as_built_joint",
+        {
+            "type": "revolute",
+            "occurrence_one": "occurrence:Lid:1",
+            "occurrence_two": "occurrence:Box:1",
+            "geometry": EDGE_BOX,
+            "name": "AB",
+        },
+        bridge,
+    )
+    assert bridge.last.params["geometry"] == EDGE_BOX and bridge.last.params["name"] == "AB"
+    rejected(
+        "assembly_create_as_built_joint", {"type": "rigid", "occurrence_one": "occurrence:Lid:1"}
+    )
+
+
+def test_assembly_set_joint_limits() -> None:
+    bridge = FakeBridge({"assembly.set_joint_limits": {"joint": JOINT}})
+    call(
+        "assembly_set_joint_limits",
+        {"joint": "Jt=", "dof": "rotation", "min": "off", "max": 110},
+        bridge,
+    )
+    assert bridge.last.params == {"joint": "Jt=", "dof": "rotation", "min": "off", "max": 110.0}
+    rejected("assembly_set_joint_limits", {"joint": "Jt=", "dof": "twist", "max": 1})
+    rejected("assembly_set_joint_limits", {"joint": "Jt=", "dof": "rotation", "max": "on"})
+
+
+def test_assembly_drive_joint() -> None:
+    answer = {"joint": JOINT, "requested": {"rotation": 90.0}, "clamped": [], "captured": True}
+    bridge = FakeBridge({"assembly.drive_joint": answer})
+    result, _ = call("assembly_drive_joint", {"joint": "Jt=", "values": {"rotation": 90}}, bridge)
+    assert bridge.last.params == {
+        "joint": "Jt=",
+        "values": {"rotation": 90.0},
+        "capture_position": True,
+    }
+    assert json.loads(result_text(result)) == answer
+    rejected("assembly_drive_joint", {"joint": "Jt=", "values": {}})
+    rejected("assembly_drive_joint", {"joint": "Jt=", "values": {"twist": 1}})
